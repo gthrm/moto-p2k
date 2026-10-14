@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moto P2K</title>
+<style>
+:root {
+  --bg: #f5f5f7; --panel: #ffffff; --line: #e3e3e8; --text: #1d1d1f; --muted: #6e6e73;
+  --accent: #0a66d8; --accent-text: #fff; --danger: #c62828; --sel: #e8f0fd; --ok: #1f8a3b; --warn: #b26a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e; --panel: #2c2c2e; --line: #3a3a3c; --text: #f2f2f7; --muted: #98989f;
+    --accent: #3d8bfd; --accent-text: #fff; --danger: #ff6b6b; --sel: #23324a; --ok: #4cd964; --warn: #ffb340;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+.pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: currentColor; }
+.pill.warn { color: var(--warn); border-color: currentColor; }
+.spacer { flex: 1; }
+button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+main { flex: 1; display: flex; min-height: 0; }
+nav { width: 230px; flex-shrink: 0; overflow: auto; border-right: 1px solid var(--line); padding: 10px 6px; background: var(--panel); }
+nav .group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 10px 4px; }
+nav a { display: flex; justify-content: space-between; gap: 6px; padding: 5px 10px; border-radius: 6px; color: inherit; text-decoration: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+nav a span.n { color: var(--muted); font-size: 12px; }
+nav a.active { background: var(--sel); }
+nav a:hover { background: var(--sel); }
+nav label { display: block; padding: 10px; color: var(--muted); font-size: 12px; cursor: pointer; }
+section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; }
+.crumb { color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crumb b { color: var(--text); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; cursor: pointer; position: relative; user-select: none; }
+.card.sel { outline: 2px solid var(--accent); background: var(--sel); }
+.thumb { height: 100px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--bg); overflow: hidden; font-size: 13px; color: var(--muted); font-weight: 600; }
+.thumb img { max-width: 100%; max-height: 100%; }
+.name { font-size: 12px; margin-top: 6px; word-break: break-all; }
+.size { font-size: 11px; color: var(--muted); }
+.card input { position: absolute; top: 12px; left: 12px; }
+.empty { color: var(--muted); padding: 40px; text-align: center; }
+#drop { position: fixed; inset: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); border: 3px dashed var(--accent); display: none; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; z-index: 10; pointer-events: none; }
+#drop.on { display: flex; }
+#log { position: fixed; right: 16px; bottom: 16px; width: 340px; max-height: 50vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.15); display: none; z-index: 5; }
+#log.on { display: block; }
+#log .row { padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+#log .row .st { color: var(--muted); white-space: nowrap; }
+#log .row .st.ok { color: var(--ok); } #log .row .st.err { color: var(--danger); }
+#log .head { padding: 8px 12px; font-weight: 600; display: flex; justify-content: space-between; }
+#err { background: var(--danger); color: #fff; padding: 8px 16px; display: none; }
+#err.on { display: block; }
+#viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 20; flex-direction: column; gap: 12px; color: #fff; }
+#viewer.on { display: flex; }
+#viewer img { max-width: 90vw; max-height: 80vh; image-rendering: auto; min-width: 320px; }
+@media (max-width: 640px) { nav { width: 150px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Moto P2K</h1>
+  <span id="status" class="pill">…</span>
+  <span class="spacer"></span>
+  <button id="bRefresh">Refresh</button>
+  <button id="bUpload" class="primary">Upload to phone…</button>
+  <button id="bDownload" disabled>Download</button>
+  <button id="bDelete" class="danger" disabled>Delete</button>
+  <button id="bQuit">Quit</button>
+  <input id="fileInput" type="file" multiple hidden>
+</header>
+<div id="err"></div>
+<main>
+  <nav id="nav"></nav>
+  <section id="main"><div class="empty">Connecting to phone…</div></section>
+</main>
+<div id="drop">Drop to upload to the phone</div>
+<div id="log"><div class="head"><span id="logTitle">Transfer</span><a href="#" id="logClose">×</a></div><div id="logRows"></div></div>
+<div id="viewer"><img id="vImg" alt=""><div id="vName"></div><div><button id="vSave">Download</button> <button id="vClose">Close</button></div></div>
+
+<script>
+const PLACES = [
+  ["Photos", "/c/mobile/picture/"],
+  ["Videos", "/c/mobile/video/"],
+  ["Ringtones", "/c/mobile/audio/"],
+  ["Java games", "/c/mobile/kjava/"],
+];
+const VOLS = { "/c/": "Phone", "/b/": "Memory card", "/a/": "System" };
+const IMG = /\.(jpe?g|gif|png|bmp)$/i;
+
+let files = [];
+let cur = "/c/mobile/picture/";
+let selected = new Set();
+let showSystem = false;
+try { showSystem = localStorage.getItem("sys") === "1"; } catch (e) {}
+const thumbs = new Map();
+let thumbQueue = [];
+let thumbBusy = false;
+let busy = 0;
+
+const $ = (id) => document.getElementById(id);
+const dir = (p) => p.slice(0, p.lastIndexOf("/") + 1);
+const base = (p) => p.slice(p.lastIndexOf("/") + 1);
+const fmt = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB";
+
+function showErr(msg) { $("err").textContent = msg; $("err").classList.toggle("on", !!msg); }
+
+async function api(path, opts = {}) {
+  // the server only accepts POSTs that carry this header (CSRF protection)
+  if (opts.method === "POST") opts.headers = { ...(opts.headers || {}), "X-P2K": "1" };
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let m = "Error " + r.status;
+    try { m = (await r.json()).error || m; } catch (e) {}
+    const err = new Error(m);
+    err.status = r.status;
+    throw err;
+  }
+  return r;
+}
+
+function forgetThumb(p) {
+  if (thumbs.has(p)) { URL.revokeObjectURL(thumbs.get(p)); thumbs.delete(p); }
+}
+
+async function fileBlob(p) {
+  if (!thumbs.has(p)) {
+    const b = await (await api("/api/file?inline=1&path=" + encodeURIComponent(p))).blob();
+    thumbs.set(p, URL.createObjectURL(b));
+  }
+  return thumbs.get(p);
+}
+
+async function status() {
+  try {
+    const s = (await (await api("/api/status")).json()).status;
+    const el = $("status");
+    el.className = "pill " + (s === "none" ? "warn" : "ok");
+    el.textContent = s === "none" ? "Phone not connected" : "Phone connected";
+    return s;
+  } catch (e) { $("status").textContent = "App is not running"; $("status").className = "pill warn"; return "none"; }
+}
+
+async function load(refresh) {
+  showErr("");
+  const s = await status();
+  if (s === "none") {
+    files = []; render();
+    $("main").innerHTML = '<div class="empty">Connect the phone with a USB cable, then click “Refresh”.</div>';
+    return;
+  }
+  $("main").innerHTML = '<div class="empty">Reading file list from the phone…</div>';
+  try {
+    files = (await (await api("/api/list" + (refresh ? "?refresh=1" : ""))).json()).files;
+  } catch (e) { showErr(e.message); files = []; }
+  await status();
+  render();
+}
+
+function folders() {
+  const m = new Map();
+  for (const f of files) {
+    const d = dir(f.path);
+    m.set(d, (m.get(d) || 0) + 1);
+  }
+  return m;
+}
+
+function render() {
+  const fm = folders();
+  if (![...fm.keys()].includes(cur) && fm.size) {
+    cur = fm.has("/c/mobile/picture/") ? "/c/mobile/picture/" : [...fm.keys()].sort()[0];
+  }
+  const nav = $("nav");
+  nav.innerHTML = "";
+  const link = (label, path, count) => {
+    const a = document.createElement("a");
+    a.className = path === cur ? "active" : "";
+    a.title = path;
+    a.innerHTML = `<span></span><span class="n">${count ?? ""}</span>`;
+    a.firstChild.textContent = label;
+    a.onclick = () => { cur = path; selected.clear(); render(); };
+    nav.appendChild(a);
+  };
+  const g = (t) => { const d = document.createElement("div"); d.className = "group"; d.textContent = t; nav.appendChild(d); };
+  g("Places");
+  for (const [l, p] of PLACES) if (fm.has(p)) link(l, p, fm.get(p));
+  for (const vol of ["/c/", "/b/", "/a/"]) {
+    if (vol === "/a/" && !showSystem) continue;
+    const ds = [...fm.keys()].filter((d) => d.startsWith(vol)).sort();
+    if (!ds.length) continue;
+    g(VOLS[vol]);
+    for (const d of ds) link(d === vol ? "/" : d.slice(vol.length).replace(/\/$/, ""), d, fm.get(d));
+  }
+  const lab = document.createElement("label");
+  lab.innerHTML = `<input type="checkbox" ${showSystem ? "checked" : ""}> Show system files`;
+  lab.querySelector("input").onchange = (e) => { showSystem = e.target.checked; try { localStorage.setItem("sys", showSystem ? "1" : "0"); } catch (x) {} render(); };
+  nav.appendChild(lab);
+
+  const list = files.filter((f) => dir(f.path) === cur).sort((a, b) => base(a.path).localeCompare(base(b.path)));
+  const main = $("main");
+  main.innerHTML = "";
+  const crumb = document.createElement("div");
+  crumb.className = "crumb";
+  crumb.innerHTML = `<span>Folder: <b></b> · ${list.length} file${list.length === 1 ? "" : "s"}</span><button id="bAll">Select all</button>`;
+  crumb.querySelector("b").textContent = cur;
+  main.appendChild(crumb);
+  crumb.querySelector("#bAll").onclick = () => {
+    const all = list.every((f) => selected.has(f.path));
+    list.forEach((f) => all ? selected.delete(f.path) : selected.add(f.path));
+    render();
+  };
+  if (!list.length) {
+    main.insertAdjacentHTML("beforeend", '<div class="empty">Empty. Drag files here to upload them to the phone.</div>');
+  }
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  thumbQueue = [];
+  for (const f of list) {
+    const c = document.createElement("div");
+    c.className = "card" + (selected.has(f.path) ? " sel" : "");
+    const ext = (base(f.path).split(".").pop() || "").toUpperCase().slice(0, 4);
+    c.innerHTML = `<input type="checkbox" ${selected.has(f.path) ? "checked" : ""}><div class="thumb"></div><div class="name"></div><div class="size">${fmt(f.size)}</div>`;
+    c.querySelector(".name").textContent = base(f.path);
+    const th = c.querySelector(".thumb");
+    if (IMG.test(f.path) && thumbs.has(f.path)) th.innerHTML = `<img src="${thumbs.get(f.path)}" alt="">`;
+    else { th.textContent = ext || "file"; if (IMG.test(f.path) && f.size < 400000) thumbQueue.push([f.path, th]); }
+    c.querySelector("input").onclick = (e) => { e.stopPropagation(); toggle(f.path); };
+    c.onclick = (e) => {
+      if (e.metaKey || e.shiftKey) { toggle(f.path); return; }
+      if (IMG.test(f.path)) openViewer(f.path); else toggle(f.path);
+    };
+    grid.appendChild(c);
+  }
+  main.appendChild(grid);
+  updateButtons();
+  pumpThumbs();
+}
+
+function toggle(p) { selected.has(p) ? selected.delete(p) : selected.add(p); render(); }
+
+function updateButtons() {
+  $("bDownload").disabled = !selected.size;
+  $("bDelete").disabled = !selected.size;
+  $("bDownload").textContent = selected.size ? `Download (${selected.size})` : "Download";
+  $("bDelete").textContent = selected.size ? `Delete (${selected.size})` : "Delete";
+}
+
+async function pumpThumbs() {
+  if (thumbBusy) return;
+  thumbBusy = true;
+  while (thumbQueue.length) {
+    if (busy) { await new Promise((r) => setTimeout(r, 500)); continue; }
+    const [p, el] = thumbQueue.shift();
+    try {
+      const url = await fileBlob(p);
+      if (el.isConnected) el.innerHTML = `<img src="${url}" alt="">`;
+    } catch (e) {
+      if (e.status === 503) break;  // phone gone: stop, don't hammer it
+    }
+  }
+  thumbBusy = false;
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+let viewing = null;
+async function openViewer(p) {
+  viewing = p;
+  $("vName").textContent = base(p);
+  $("vImg").src = thumbs.get(p) || "";
+  $("viewer").classList.add("on");
+  if (!thumbs.has(p)) {
+    try {
+      const url = await fileBlob(p);
+      if (viewing === p) $("vImg").src = url;
+    } catch (e) { showErr(e.message); }
+  }
+}
+$("vClose").onclick = () => { $("viewer").classList.remove("on"); viewing = null; };
+$("viewer").onclick = (e) => { if (e.target.id === "viewer") $("vClose").onclick(); };
+$("vSave").onclick = async () => {
+  const p = viewing;
+  try {
+    const r = await fetch(await fileBlob(p));
+    saveBlob(await r.blob(), base(p));
+  } catch (e) { showErr(e.message); }
+};
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("vClose").onclick(); });
+
+function logStart(title) { $("logTitle").textContent = title; $("logRows").innerHTML = ""; $("log").classList.add("on"); }
+function logRow(name) {
+  const r = document.createElement("div"); r.className = "row";
+  r.innerHTML = `<span></span><span class="st">waiting</span>`;
+  r.firstChild.textContent = name;
+  $("logRows").appendChild(r);
+  return (t, cls) => { r.lastChild.textContent = t; r.lastChild.className = "st " + (cls || ""); };
+}
+$("logClose").onclick = (e) => { e.preventDefault(); $("log").classList.remove("on"); };
+
+async function download() {
+  const paths = [...selected];
+  busy++;
+  logStart("Downloading");
+  try {
+    if (paths.length === 1) {
+      const st = logRow(base(paths[0])); st("downloading…");
+      const b = await (await api("/api/file?path=" + encodeURIComponent(paths[0]))).blob();
+      saveBlob(b, base(paths[0])); st("done → Downloads", "ok");
+    } else {
+      const st = logRow(paths.length + " files → V3r_files.zip"); st("downloading…");
+      const b = await (await api("/api/zip", { method: "POST", body: JSON.stringify({ paths }) })).blob();
+      saveBlob(b, "V3r_files.zip"); st("done → Downloads", "ok");
+    }
+  } catch (e) { showErr(e.message); }
+  busy--;
+}
+
+async function upload(fileList) {
+  const list = [...fileList];
+  if (!list.length) return;
+  busy++;
+  logStart("To phone → " + cur);
+  const rows = list.map((f) => logRow(f.name));
+  for (let i = 0; i < list.length; i++) {
+    rows[i]("uploading…");
+    try {
+      const r = await api(`/api/upload?dir=${encodeURIComponent(cur)}&name=${encodeURIComponent(list[i].name)}`, { method: "POST", body: list[i] });
+      const p = (await r.json()).path;
+      forgetThumb(p);
+      rows[i](base(p) === list[i].name ? "done" : "done as " + base(p), "ok");
+    } catch (e) { rows[i](e.message, "err"); showErr(e.message); break; }
+  }
+  busy--;
+  await load(false);
+}
+
+async function del() {
+  const paths = [...selected];
+  if (!confirm(`Delete ${paths.length} file${paths.length === 1 ? "" : "s"} from the phone?\n\n` + paths.slice(0, 10).map(base).join("\n") + (paths.length > 10 ? "\n…" : ""))) return;
+  busy++;
+  try { await api("/api/delete", { method: "POST", body: JSON.stringify({ paths }) }); }
+  catch (e) { showErr(e.message); }
+  paths.forEach(forgetThumb);
+  selected.clear();
+  busy--;
+  await load(false);
+}
+
+$("bRefresh").onclick = () => { [...thumbs.keys()].forEach(forgetThumb); load(true); };
+$("bUpload").onclick = () => $("fileInput").click();
+$("fileInput").onchange = (e) => { upload(e.target.files); e.target.value = ""; };
+$("bDownload").onclick = download;
+$("bDelete").onclick = del;
+$("bQuit").onclick = async () => { try { await api("/api/quit", { method: "POST" }); } catch (e) {} document.body.innerHTML = '<div class="empty">The app has quit. You can close this tab.</div>'; };
+
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("drop").classList.add("on"); });
+window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("drop").classList.remove("on"); } });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("drop").classList.remove("on"); upload(e.dataTransfer.files); });
+
+setInterval(() => fetch("/api/ping").catch(() => {}), 10000);
+fetch("/api/ping").catch(() => {});
+setInterval(async () => {
+  const before = $("status").className;
+  const s = await status();
+  if (s !== "none" && !files.length && !busy && before.includes("warn")) load(true);
+}, 4000);
+load(false);
+</script>
+</body>
+</html>
