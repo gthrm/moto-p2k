@@ -32,7 +32,9 @@ Re-run `./make_app.sh` after changing the code.
 ## Using the app
 
 1. Plug in the phone. The app switches it to P2K mode on its own (see below).
-2. The sidebar lists the phone's folders. The *Places* section has shortcuts to
+2. The header shows how much space is free on the open volume (it turns orange
+   below 300 KB), and the sidebar shows free space for each volume.
+   The sidebar lists the phone's folders. The *Places* section has shortcuts to
    **Photos** (`/c/mobile/picture`), **Videos**, **Ringtones** and **Java games**.
    Tick *Show system files* to see the `/a` volume too.
 3. **Phone → Mac:** select files and click **Download**. One file is saved as-is;
@@ -40,7 +42,8 @@ Re-run `./make_app.sh` after changing the code.
 4. **Mac → phone:** drag files into the window or click **Upload to phone…**.
    They go into the folder that's open. The phone only accepts Latin file names,
    so names are transliterated (`Фото.jpg` → `Foto.jpg`). Existing files are never
-   overwritten: a clashing name gets a suffix (`Foto_1.jpg`).
+   overwritten: a clashing name gets a suffix (`Foto_1.jpg`). Files bigger than
+   the free space are refused before anything is written.
 5. Click an image to preview it.
 6. **Quit** stops the app. It also stops on its own 10 minutes after the browser
    tab is closed.
@@ -58,6 +61,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./p2k get <path> [dest]      # download one file
 ./p2k pull <filter> <dir>    # download every file whose path contains filter
 ./p2k put <file> <path>      # upload (path ending in / keeps the file name)
+./p2k df                     # free space per volume
 ./p2k mode                   # just switch the phone to P2K mode
 ```
 
@@ -83,6 +87,7 @@ USB control transfers on that interface:
 | `0x05`           | delete                                   |
 | `0x07` / `0x08`  | search request / fetch file-list records |
 | `0x0A`           | list volumes                             |
+| `0x0B`           | free space of a volume                   |
 
 The phone has these volumes:
 

@@ -34,7 +34,7 @@ mimetypes.add_type("audio/midi", ".mid")
 mimetypes.add_type("video/3gpp", ".3gp")
 
 lock = threading.Lock()
-state = {"phone": None, "files": None, "last_ping": time.time()}
+state = {"phone": None, "files": None, "space": None, "last_ping": time.time()}
 
 
 class AppError(Exception):
@@ -48,6 +48,7 @@ def drop_phone():
         state["phone"].release()
     state["phone"] = None
     state["files"] = None
+    state["space"] = None
 
 
 def phone_status():
@@ -82,6 +83,13 @@ def file_list(refresh=False):
     if refresh or state["files"] is None:
         state["files"] = with_phone(lambda ph: ph.list_files())
     return state["files"]
+
+
+def free_space(refresh=False):
+    """{'/a/': bytes, '/c/': bytes, ...} for every volume the phone reports."""
+    if refresh or state["space"] is None:
+        state["space"] = with_phone(lambda ph: {v + "/": ph.free_space(v) for v in ph.volumes()})
+    return state["space"]
 
 
 def file_info(path):
@@ -133,7 +141,14 @@ def write_file(folder, name, data):
         folder += "/"
     files = file_list()
     path = unique_path(folder, safe_name(name), {n.lower() for n, _, _ in files})
-    with_phone(lambda ph: ph.write_all(path, data))
+    free = free_space(refresh=True).get(path[:3])
+    if free is not None and len(data) > free:
+        raise AppError("Not enough space on the phone: %s needs %s, only %s free"
+                       % (name, p2k.human(len(data)), p2k.human(free)), 507)
+    try:
+        with_phone(lambda ph: ph.write_all(path, data))
+    finally:
+        state["space"] = None
     if state["files"] is not None:
         state["files"].append((path, len(data), 0))
     return path
@@ -147,7 +162,10 @@ def delete_files(paths):
                 state["files"] = [f for f in state["files"] if f[0] != p]
             time.sleep(0.3)
 
-    with_phone(go)
+    try:
+        with_phone(go)
+    finally:
+        state["space"] = None
 
 
 def zip_files(paths):
@@ -226,6 +244,8 @@ class Handler(BaseHTTPRequestHandler):
             elif route == ("GET", "/api/list"):
                 files = file_list(refresh=q.get("refresh") == "1")
                 self._json({"files": [{"path": n, "size": s, "attr": a} for n, s, a in files]})
+            elif route == ("GET", "/api/space"):
+                self._json({"free": free_space(refresh=q.get("refresh") == "1")})
             elif route == ("GET", "/api/file"):
                 path = q["path"]
                 ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"

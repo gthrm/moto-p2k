@@ -7,6 +7,7 @@ Protocol based on libp2kmoto 0.1 (Dmitry Nezhevenko, GPL) and p2k-core.
   ./p2k get <path> [dest]       download a file
   ./p2k pull <filter> <dir>     download every file whose path contains filter
   ./p2k put <file> <path>       upload a file to the phone (e.g. /c/mobile/audio/x.mp3)
+  ./p2k df                      free space per volume
   ./p2k mode                    just switch the phone to P2K mode
 """
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -150,9 +151,17 @@ class Phone:
 
     # --- file system ---------------------------------------------------
     def volumes(self):
-        buf = self.fs(0x0A)
-        raw = buf[14:]
-        return raw.decode("utf-16-be", errors="ignore").replace("\x00", " ").split()
+        """Volume names, e.g. ['/a', '/c'] (UTF-16BE, separated by U+FFFE)."""
+        text = self.fs(0x0A)[14:].decode("utf-16-be", errors="ignore").split("\x00", 1)[0]
+        return [v.strip() for v in text.split("\ufffe") if v.strip()]
+
+    def free_space(self, volume):
+        """Free bytes on a volume ('/c' or '/c/')."""
+        arg = b"\0\0" + volume.rstrip("/").encode("utf-16-be") + b"\0\0"
+        buf = self.fs(0x0B, arg + b"\0" * (0xFC - len(arg)))
+        if buf[8] != 0x80:
+            raise P2KError("free space %s: phone error 0x%02x" % (volume, buf[8]))
+        return int.from_bytes(buf[14:18], "big")
 
     def list_files(self, volumes=("/a/", "/b/", "/c/")):
         files = []
@@ -272,6 +281,13 @@ def progress(done, total):
     sys.stdout.flush()
 
 
+def human(n):
+    for unit in ("B", "KB", "MB"):
+        if n < 1024 or unit == "MB":
+            return ("%d %s" if unit == "B" else "%.1f %s") % (n, unit)
+        n /= 1024
+
+
 def find(files, path):
     for f in files:
         if f[0] == path:
@@ -290,6 +306,12 @@ def main(argv):
         return 0
     if op == "volumes":
         print(ph.volumes())
+        return 0
+    if op == "df":
+        files = ph.list_files()
+        for vol in ph.volumes():
+            used = sum(size for name, size, _ in files if name.startswith(vol + "/"))
+            print("%-3s  free %9s   used by files %9s" % (vol, human(ph.free_space(vol)), human(used)))
         return 0
     files = ph.list_files()
     if op == "ls":

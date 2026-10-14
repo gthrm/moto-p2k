@@ -69,6 +69,7 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 <header>
   <h1>Moto P2K</h1>
   <span id="status" class="pill">…</span>
+  <span id="free" class="pill" hidden></span>
   <span class="spacer"></span>
   <button id="bRefresh">Refresh</button>
   <button id="bUpload" class="primary">Upload to phone…</button>
@@ -97,6 +98,7 @@ const VOLS = { "/c/": "Phone", "/b/": "Memory card", "/a/": "System" };
 const IMG = /\.(jpe?g|gif|png|bmp)$/i;
 
 let files = [];
+let space = {};
 let cur = "/c/mobile/picture/";
 let selected = new Set();
 let showSystem = false;
@@ -161,6 +163,9 @@ async function load(refresh) {
   try {
     files = (await (await api("/api/list" + (refresh ? "?refresh=1" : ""))).json()).files;
   } catch (e) { showErr(e.message); files = []; }
+  try {
+    space = (await (await api("/api/space" + (refresh ? "?refresh=1" : ""))).json()).free;
+  } catch (e) { space = {}; }
   await status();
   render();
 }
@@ -197,13 +202,20 @@ function render() {
     if (vol === "/a/" && !showSystem) continue;
     const ds = [...fm.keys()].filter((d) => d.startsWith(vol)).sort();
     if (!ds.length) continue;
-    g(VOLS[vol]);
+    g(VOLS[vol] + (space[vol] != null ? ` · ${fmt(space[vol])} free` : ""));
     for (const d of ds) link(d === vol ? "/" : d.slice(vol.length).replace(/\/$/, ""), d, fm.get(d));
   }
   const lab = document.createElement("label");
   lab.innerHTML = `<input type="checkbox" ${showSystem ? "checked" : ""}> Show system files`;
   lab.querySelector("input").onchange = (e) => { showSystem = e.target.checked; try { localStorage.setItem("sys", showSystem ? "1" : "0"); } catch (x) {} render(); };
   nav.appendChild(lab);
+
+  const vol = cur.slice(0, 3), free = space[vol];
+  $("free").hidden = free == null;
+  if (free != null) {
+    $("free").textContent = `${fmt(free)} free · ${VOLS[vol] || vol}`;
+    $("free").className = "pill " + (free < 300 * 1024 ? "warn" : "");
+  }
 
   const list = files.filter((f) => dir(f.path) === cur).sort((a, b) => base(a.path).localeCompare(base(b.path)));
   const main = $("main");
