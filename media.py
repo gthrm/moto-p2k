@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 import io
 import os
+import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 
 SCREEN = (176, 220)  # RAZR V3r main display, width x height
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".heif", ".tif", ".tiff", ".webp"}
 AUDIO_EXT = {".mp3", ".m4a", ".aac", ".wav", ".aif", ".aiff", ".flac", ".ogg", ".opus"}
 MP3_BITRATES = (128, 96, 64, 48, 32)
+FFMPEG_TIMEOUT = 600  # seconds
 IMAGE_MODES = ("fit", "fill")
 
 
@@ -115,23 +119,67 @@ def mp3_for_phone(data, name, kbps=64, on_progress=None):
             cmd += ["-ac", "1"]
         duration = _duration(ffmpeg, src) if on_progress else None
         cmd += ["-progress", "pipe:1", "-nostats", dst]
-        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as p:
-            for line in p.stdout:
-                # out_time_us is microseconds of audio encoded so far
-                if duration and line.startswith("out_time_us="):
-                    try:
-                        on_progress(min(int(line.split("=", 1)[1]) / 1e6 / duration, 1.0))
-                    except ValueError:
-                        pass
-            err = p.stderr.read()
+        log = os.path.join(tmp, "ffmpeg.log")
+        # errors go to a file, not a pipe: a broken input can log more than a pipe holds
+        with open(log, "w") as errf, \
+                subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, text=True) as p:
+            killer = threading.Timer(FFMPEG_TIMEOUT, p.kill)
+            killer.start()
+            try:
+                for line in p.stdout:
+                    # out_time_us is microseconds of audio encoded so far
+                    if duration and line.startswith("out_time_us="):
+                        try:
+                            on_progress(min(int(line.split("=", 1)[1]) / 1e6 / duration, 1.0))
+                        except ValueError:
+                            pass
+            finally:
+                killer.cancel()
         if p.returncode != 0 or not os.path.exists(dst):
-            msg = (err.strip().splitlines() or ["unknown error"])[-1]
+            if p.returncode == -signal.SIGKILL:
+                msg = "timed out after %d s" % FFMPEG_TIMEOUT
+            else:
+                with open(log) as f:
+                    msg = (f.read().strip().splitlines() or ["unknown error"])[-1]
+                msg = re.sub(r"^\[[^\]]* @ 0x[0-9a-f]+\] ", "", msg)  # drop ffmpeg's "[muxer @ 0x...]" prefix
             raise MediaError("Can't convert %s: %s" % (name, msg))
         with open(dst, "rb") as f:
             out = f.read()
     if _ext(name) == ".mp3" and len(out) >= len(data):
         return data, name
     return out, os.path.splitext(name)[0] + ".mp3"
+
+
+def sniff_image(data):
+    """MIME type of an image from its first bytes, or None."""
+    for magic, mime in ((b"GIF8", "image/gif"), (b"\xff\xd8\xff", "image/jpeg"),
+                        (b"\x89PNG", "image/png"), (b"BM", "image/bmp")):
+        if data.startswith(magic):
+            return mime
+    return None
+
+
+def ems_to_png(data, scale=4):
+    """Render an EMS colour picture (.ems on Motorola phones) as PNG.
+
+    Layout: 0x04, width, height, then width*height pixels of 6 bits each
+    (2 bits per R, G, B), packed MSB first.
+    """
+    from PIL import Image
+    if len(data) < 3 or data[0] != 0x04:
+        raise MediaError("Unsupported EMS picture")
+    w, h = data[1], data[2]
+    if len(data) != 3 + (w * h * 6 + 7) // 8:
+        raise MediaError("Unsupported EMS picture")
+    bits, nbits = int.from_bytes(data[3:], "big"), (len(data) - 3) * 8
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for i in range(w * h):
+        v = (bits >> (nbits - 6 * (i + 1))) & 0x3F
+        px[i % w, i // w] = ((v >> 4 & 3) * 85, (v >> 2 & 3) * 85, (v & 3) * 85)
+    out = io.BytesIO()
+    im.resize((w * scale, h * scale), Image.NEAREST).save(out, "PNG")
+    return out.getvalue()
 
 
 def kind(name):

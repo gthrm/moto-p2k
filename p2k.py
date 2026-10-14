@@ -15,8 +15,10 @@ Protocol based on libp2kmoto 0.1 (Dmitry Nezhevenko, GPL) and p2k-core.
 # SPDX-License-Identifier: GPL-2.0-or-later
 import glob
 import os
+import re
 import sys
 import time
+import unicodedata
 
 import usb.backend.libusb1
 import usb.core
@@ -270,6 +272,29 @@ class Phone:
         print()
 
 
+TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya", "ђ": "dj", "ј": "j", "љ": "lj", "њ": "nj", "ћ": "c", "џ": "dz",
+}
+
+
+def _latin(s):
+    s = "".join(
+        (TRANSLIT[c.lower()].capitalize() if c.isupper() else TRANSLIT[c]) if c.lower() in TRANSLIT else c
+        for c in s)
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9 ._~()\-]", "_", s)
+
+
+def safe_name(name):
+    """The phone only accepts Latin characters in file names."""
+    base, ext = os.path.splitext(name)
+    return (_latin(base).strip()[:60] or "file") + _latin(ext)[:8]
+
+
 def progress(done, total):
     w = 30
     k = int(w * done / total) if total else w
@@ -302,7 +327,8 @@ def put_args(args):
         elif a == "--wallpaper":
             opts["image_mode"] = "fill"
         elif a == "--mp3":
-            kbps = int(next(it, "0"))
+            kbps = next(it, "")
+            kbps = int(kbps) if kbps.isdigit() else 0
             if kbps not in media.MP3_BITRATES:
                 raise P2KError("--mp3 must be one of %s" % ", ".join(map(str, media.MP3_BITRATES)))
             opts["mp3_kbps"] = kbps
@@ -365,6 +391,11 @@ def main(argv):
                 raise P2KError(str(e))
         if path.endswith("/"):
             path += name
+        elif os.path.splitext(name)[1] != os.path.splitext(src)[1]:
+            # converted to JPEG/MP3: the extension must match the new content
+            path = os.path.splitext(path)[0] + os.path.splitext(name)[1]
+        folder, fname = path.rsplit("/", 1)
+        path = folder + "/" + safe_name(fname)
         print(src, "->", path, "(%s)" % human(len(data)))
         ph.write_all(path, data, progress)
         print()

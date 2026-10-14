@@ -69,7 +69,7 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 #err.on { display: block; }
 #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 20; flex-direction: column; gap: 12px; color: #fff; }
 #viewer.on { display: flex; }
-#viewer img { max-width: 90vw; max-height: 80vh; image-rendering: auto; min-width: 320px; }
+#viewer img { max-width: 90vw; max-height: 80vh; image-rendering: pixelated; min-width: 320px; }
 @media (max-width: 640px) { nav { width: 150px; } }
 </style>
 </head>
@@ -120,7 +120,7 @@ const PLACES = [
   ["Java games", "/c/mobile/kjava/"],
 ];
 const VOLS = { "/c/": "Phone", "/b/": "Memory card", "/a/": "System" };
-const IMG = /\.(jpe?g|gif|png|bmp)$/i;
+const IMG = /\.(jpe?g|gif|png|bmp|emp|ems)$/i;  // .emp = GIF, .ems = EMS bitmap (converted for preview)
 
 let files = [];
 let space = {};
@@ -160,7 +160,7 @@ function forgetThumb(p) {
 
 async function fileBlob(p) {
   if (!thumbs.has(p)) {
-    const b = await (await api("/api/file?inline=1&path=" + encodeURIComponent(p))).blob();
+    const b = await (await api("/api/file?inline=1&preview=1&path=" + encodeURIComponent(p))).blob();
     thumbs.set(p, URL.createObjectURL(b));
   }
   return thumbs.get(p);
@@ -333,7 +333,8 @@ $("viewer").onclick = (e) => { if (e.target.id === "viewer") $("vClose").onclick
 $("vSave").onclick = async () => {
   const p = viewing;
   try {
-    const r = await fetch(await fileBlob(p));
+    // the cached preview of an .ems file is a PNG, so fetch the original for saving
+    const r = /\.ems$/i.test(p) ? await api("/api/file?path=" + encodeURIComponent(p)) : await fetch(await fileBlob(p));
     saveBlob(await r.blob(), base(p));
   } catch (e) { showErr(e.message); }
 };
@@ -354,7 +355,11 @@ function logRow(name) {
   };
 }
 
-const secs = (s) => s == null ? "" : s < 60 ? `${Math.ceil(s)} s` : `${Math.floor(s / 60)} min ${Math.ceil(s % 60)} s`;
+const secs = (s) => {
+  if (s == null) return "";
+  const t = Math.ceil(s);
+  return t < 60 ? `${t} s` : `${Math.floor(t / 60)} min ${t % 60} s`;
+};
 
 function describe(p) {
   if (p.stage === "compressing") return p.total ? [`compressing ${Math.round(p.done / p.total * 100)}%`, p.done / p.total] : ["compressing…", null];
@@ -425,9 +430,9 @@ async function upload(fileList) {
   const list = [...fileList];
   if (!list.length) return;
   busy++;
-  logStart($("optSort").checked ? "Uploading to phone" : "To phone → " + cur);
+  logStart("Uploading");
   const rows = list.map((f) => logRow(f.name));
-  let last = null;
+  let last = null, failed = -1;
   for (let i = 0; i < list.length; i++) {
     $("logTitle").textContent = `Uploading ${i + 1} of ${list.length}`;
     try {
@@ -436,9 +441,14 @@ async function upload(fileList) {
       last = res.path;
       const shrunk = res.size < res.original ? ` · ${fmt(res.original)} → ${fmt(res.size)}` : "";
       rows[i](`done → ${dir(res.path).replace("/c/mobile/", "")}${base(res.path)}${shrunk}`, "ok");
-    } catch (e) { rows[i](e.message, "err"); showErr(e.message); break; }
+    } catch (e) { rows[i](e.message, "err"); showErr(e.message); failed = i; break; }
   }
-  $("logTitle").textContent = "Upload finished";
+  if (failed >= 0) {
+    for (let i = failed + 1; i < list.length; i++) rows[i]("skipped", "err");
+    $("logTitle").textContent = `Upload stopped: ${failed} of ${list.length} sent`;
+  } else {
+    $("logTitle").textContent = `Upload finished: ${list.length} of ${list.length} sent`;
+  }
   if (last) { cur = dir(last); selected.clear(); }  // show where the files went
   busy--;
   await load(false);

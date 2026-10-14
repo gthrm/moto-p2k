@@ -8,11 +8,9 @@ import io
 import json
 import mimetypes
 import os
-import re
 import sys
 import threading
 import time
-import unicodedata
 import urllib.parse
 import webbrowser
 import zipfile
@@ -34,7 +32,7 @@ mimetypes.add_type("audio/amr", ".amr")
 mimetypes.add_type("audio/midi", ".mid")
 mimetypes.add_type("video/3gpp", ".3gp")
 
-FOLDERS = {"picture": "/c/mobile/picture/", "music": "/c/mobile/audio/", "video": "/c/mobile/video/"}
+FOLDERS = {"picture": "mobile/picture/", "music": "mobile/audio/", "video": "mobile/video/"}
 
 lock = threading.Lock()
 jobs = {}  # upload id -> {"stage", "done", "total", "rate", "eta"} for the progress display
@@ -108,29 +106,6 @@ def read_file(path):
     return with_phone(lambda ph: ph.read_all(name, size, attr))
 
 
-TRANSLIT = {
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
-    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
-    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
-    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
-    "я": "ya", "ђ": "dj", "ј": "j", "љ": "lj", "њ": "nj", "ћ": "c", "џ": "dz",
-}
-
-
-def _latin(s):
-    s = "".join(
-        (TRANSLIT[c.lower()].capitalize() if c.isupper() else TRANSLIT[c]) if c.lower() in TRANSLIT else c
-        for c in s)
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-    return re.sub(r"[^A-Za-z0-9 ._~()\-]", "_", s)
-
-
-def safe_name(name):
-    """The phone only accepts Latin characters in file names."""
-    base, ext = os.path.splitext(name)
-    return (_latin(base).strip()[:60] or "file") + _latin(ext)[:8]
-
-
 def unique_path(folder, name, taken):
     base, ext = os.path.splitext(name)
     path, i = folder + name, 1
@@ -147,19 +122,21 @@ def job_update(job, **kw):
 
 def write_file(folder, name, data, image_mode=None, mp3_kbps=None, sort=False, job=None):
     if sort and media.kind(name) in FOLDERS:
-        folder = FOLDERS[media.kind(name)]
+        # same volume as the open folder (memory card stays on the card), never /a
+        vol = folder[:3] if folder[:3] in ("/b/", "/c/") else "/c/"
+        folder = vol + FOLDERS[media.kind(name)]
     if not folder.endswith("/"):
         folder += "/"
     original = len(data)
     job_update(job, stage="compressing", done=0, total=0)
     try:
-        data, name = media.prepare(data, name, image_mode, mp3_kbps,
-                                   lambda f: job_update(job, done=int(f * 1000), total=1000))
+        on_progress = (lambda f: job_update(job, done=int(f * 1000), total=1000)) if job else None
+        data, name = media.prepare(data, name, image_mode, mp3_kbps, on_progress)
     except media.MediaError as e:
         raise AppError(str(e), 422)
     job_update(job, stage="waiting", done=0, total=len(data))
     files = file_list()
-    path = unique_path(folder, safe_name(name), {n.lower() for n, _, _ in files})
+    path = unique_path(folder, p2k.safe_name(name), {n.lower() for n, _, _ in files})
     free = free_space(refresh=True).get(path[:3])
     if free is not None and len(data) > free:
         raise AppError("Not enough space on the phone: %s needs %s, only %s free"
@@ -282,8 +259,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"free": free_space(refresh=q.get("refresh") == "1")})
             elif route == ("GET", "/api/file"):
                 path = q["path"]
+                data = read_file(path)
                 ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
-                self._bytes(read_file(path), ctype, os.path.basename(path), inline=q.get("inline") == "1")
+                if q.get("preview") == "1":
+                    # show what's really inside: .emp files are GIFs, .ems are EMS bitmaps
+                    if path.lower().endswith(".ems"):
+                        try:
+                            data, ctype = media.ems_to_png(data), "image/png"
+                        except media.MediaError as e:
+                            raise AppError(str(e), 415)
+                    else:
+                        ctype = media.sniff_image(data) or ctype
+                self._bytes(data, ctype, os.path.basename(path), inline=q.get("inline") == "1")
             elif route == ("POST", "/api/upload"):
                 img = q.get("img")
                 kbps = int(q["mp3"]) if q.get("mp3") else None

@@ -1,6 +1,10 @@
 #!/bin/sh
 # Builds ~/Applications/Moto P2K.app (requires: brew install libusb)
 set -e
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+    echo "Python 3.10 or newer is required (found: $(python3 --version 2>&1)). Try: brew install python" >&2
+    exit 1
+fi
 SRC="$(cd "$(dirname "$0")" && pwd)"
 APP="$HOME/Applications/Moto P2K.app"
 rm -rf "$APP"
