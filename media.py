@@ -71,6 +71,9 @@ def image_for_screen(data, name, mode="fit", quality=85):
         im = Image.open(io.BytesIO(data))
         if getattr(im, "is_animated", False):
             return data, name
+        # the phone shows a JPEG as stored: progressive ones not at all, EXIF rotation ignored
+        phone_ready = (im.format == "JPEG" and not im.info.get("progressive") and not im.info.get("progression")
+                       and im.getexif().get(0x0112, 1) == 1)
         im = ImageOps.exif_transpose(im)
     except Exception:
         raise MediaError("Can't read %s: not a picture, or a format that isn't supported" % name)
@@ -92,7 +95,7 @@ def image_for_screen(data, name, mode="fit", quality=85):
     out = io.BytesIO()
     im.save(out, "JPEG", quality=quality, optimize=True)  # baseline: old phones can't do progressive
     out = out.getvalue()
-    if mode == "fit" and small_already and _ext(name) in (".jpg", ".jpeg") and len(out) >= len(data):
+    if mode == "fit" and small_already and phone_ready and len(out) >= len(data):
         return data, name
     return out, os.path.splitext(name)[0] + ".jpg"
 
@@ -108,9 +111,12 @@ def _probe(ffmpeg, path):
     ffprobe = _ffprobe(ffmpeg)
     if not ffprobe:
         return info
-    r = subprocess.run([ffprobe, "-v", "error", "-of", "json", "-show_entries",
-                        "format=duration:stream=codec_type,codec_name,width,height", path],
-                       capture_output=True, text=True, timeout=60)
+    try:
+        r = subprocess.run([ffprobe, "-v", "error", "-of", "json", "-show_entries",
+                            "format=duration:stream=codec_type,codec_name,width,height", path],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return info  # unknown: the conversion itself will report what's wrong
     try:
         j = json.loads(r.stdout)
     except ValueError:
@@ -155,7 +161,7 @@ def _run_ffmpeg(ffmpeg, args, dst, name, duration=None, on_progress=None, timeou
             killer.cancel()
     if p.returncode != 0 or not os.path.exists(dst):
         if p.returncode == -signal.SIGKILL:
-            msg = "timed out after %d s" % FFMPEG_TIMEOUT
+            msg = "timed out after %d s" % timeout
         else:
             with open(log) as f:
                 msg = (f.read().strip().splitlines() or ["unknown error"])[-1]
@@ -330,8 +336,7 @@ def video_for_phone(data, name, quality="normal", on_progress=None):
                  "-map_metadata", "-1", "-f", "3gp"]
         out = _run_ffmpeg(ffmpeg, args, os.path.join(tmp, "out.3gp"), name, info["duration"],
                           _scaled(on_progress, 0.15 if amr else 0, 1), timeout=left())
-    if _ext(name) == ".3gp" and len(out) >= len(data):
-        return data, name
+    # no "keep the original if smaller" here: _phone_ready said the phone can't play it
     return out, os.path.splitext(name)[0] + ".3gp"
 
 
