@@ -7,6 +7,8 @@ Protocol based on libp2kmoto 0.1 (Dmitry Nezhevenko, GPL) and p2k-core.
   ./p2k get <path> [dest]       download a file
   ./p2k pull <filter> <dir>     download every file whose path contains filter
   ./p2k put <file> <path>       upload a file to the phone (e.g. /c/mobile/audio/x.mp3)
+        [--fit | --wallpaper]     resize pictures to the 176x220 screen (wallpaper = crop)
+        [--mp3 KBPS]              re-encode music as MP3 (128, 96, 64, 48 or 32 kbps)
   ./p2k df                      free space per volume
   ./p2k mode                    just switch the phone to P2K mode
 """
@@ -267,12 +269,6 @@ class Phone:
             f.write(data)
         print()
 
-    def upload(self, src, path):
-        with open(src, "rb") as f:
-            data = f.read()
-        self.write_all(path, data, progress)
-        print()
-
 
 def progress(done, total):
     w = 30
@@ -293,6 +289,28 @@ def find(files, path):
         if f[0] == path:
             return f
     raise P2KError("No such file on the phone: " + path)
+
+
+def put_args(args):
+    """put [--fit | --wallpaper] [--mp3 KBPS] <file> <path>"""
+    import media
+    opts, rest = {}, []
+    it = iter(args)
+    for a in it:
+        if a == "--fit":
+            opts["image_mode"] = "fit"
+        elif a == "--wallpaper":
+            opts["image_mode"] = "fill"
+        elif a == "--mp3":
+            kbps = int(next(it, "0"))
+            if kbps not in media.MP3_BITRATES:
+                raise P2KError("--mp3 must be one of %s" % ", ".join(map(str, media.MP3_BITRATES)))
+            opts["mp3_kbps"] = kbps
+        else:
+            rest.append(a)
+    if len(rest) != 2:
+        raise P2KError("usage: put [--fit | --wallpaper] [--mp3 KBPS] <file> <path>")
+    return rest[0], rest[1], opts
 
 
 def main(argv):
@@ -335,11 +353,21 @@ def main(argv):
                 print(name, "->", dest)
                 ph.download(name, size, attr, dest)
     elif op == "put":
-        src, path = argv[1], argv[2]
+        src, path, opts = put_args(argv[1:])
+        with open(src, "rb") as f:
+            data = f.read()
+        name = os.path.basename(src)
+        if opts:
+            import media
+            try:
+                data, name = media.prepare(data, name, **opts)
+            except media.MediaError as e:
+                raise P2KError(str(e))
         if path.endswith("/"):
-            path += os.path.basename(src)
-        print(src, "->", path)
-        ph.upload(src, path)
+            path += name
+        print(src, "->", path, "(%s)" % human(len(data)))
+        ph.write_all(path, data, progress)
+        print()
     else:
         print(__doc__)
         return 1

@@ -5,7 +5,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 APP="$HOME/Applications/Moto P2K.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$SRC/p2k.py" "$SRC/p2k_app.py" "$SRC/p2k_ui.html" "$APP/Contents/Resources/"
+cp "$SRC/p2k.py" "$SRC/p2k_app.py" "$SRC/media.py" "$SRC/p2k_ui.html" "$APP/Contents/Resources/"
 python3 -m venv "$APP/Contents/Resources/venv"
 "$APP/Contents/Resources/venv/bin/pip" install -q --disable-pip-version-check -r "$SRC/requirements.txt"
 cat > "$APP/Contents/MacOS/MotoP2K" <<'SH'

@@ -57,6 +57,10 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 #log .row .st { color: var(--muted); white-space: nowrap; }
 #log .row .st.ok { color: var(--ok); } #log .row .st.err { color: var(--danger); }
 #log .head { padding: 8px 12px; font-weight: 600; display: flex; justify-content: space-between; }
+#opts { display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+#opts label { display: flex; align-items: center; gap: 6px; }
+#opts select { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+#opts .note { font-size: 12px; }
 #err { background: var(--danger); color: #fff; padding: 8px 16px; display: none; }
 #err.on { display: block; }
 #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 20; flex-direction: column; gap: 12px; color: #fff; }
@@ -78,6 +82,22 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
   <button id="bQuit">Quit</button>
   <input id="fileInput" type="file" multiple hidden>
 </header>
+<div id="opts">
+  <span>When uploading:</span>
+  <label>Pictures
+    <select id="optImg">
+      <option value="">Keep original</option>
+      <option value="fit">Fit screen 176×220</option>
+      <option value="fill">Wallpaper 176×220 (crop)</option>
+    </select>
+  </label>
+  <label>Music
+    <select id="optMp3">
+      <option value="">Keep original</option>
+    </select>
+  </label>
+  <span class="note" id="optNote"></span>
+</div>
 <div id="err"></div>
 <main>
   <nav id="nav"></nav>
@@ -351,10 +371,11 @@ async function upload(fileList) {
   for (let i = 0; i < list.length; i++) {
     rows[i]("uploading…");
     try {
-      const r = await api(`/api/upload?dir=${encodeURIComponent(cur)}&name=${encodeURIComponent(list[i].name)}`, { method: "POST", body: list[i] });
-      const p = (await r.json()).path;
-      forgetThumb(p);
-      rows[i](base(p) === list[i].name ? "done" : "done as " + base(p), "ok");
+      const q = new URLSearchParams({ dir: cur, name: list[i].name, img: $("optImg").value, mp3: $("optMp3").value });
+      const res = await (await api("/api/upload?" + q, { method: "POST", body: list[i] })).json();
+      forgetThumb(res.path);
+      const shrunk = res.size < res.original ? ` · ${fmt(res.original)} → ${fmt(res.size)}` : "";
+      rows[i]((base(res.path) === list[i].name ? "done" : "done as " + base(res.path)) + shrunk, "ok");
     } catch (e) { rows[i](e.message, "err"); showErr(e.message); break; }
   }
   busy--;
@@ -385,6 +406,25 @@ window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $
 window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("drop").classList.remove("on"); } });
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("drop").classList.remove("on"); upload(e.dataTransfer.files); });
+
+function initOptions(caps) {
+  const img = $("optImg"), mp3 = $("optMp3");
+  for (const k of caps.bitrates) {
+    const o = document.createElement("option");
+    o.value = k; o.textContent = `Compress MP3 to ${k} kbps` + (k <= 48 ? " mono" : "");
+    mp3.appendChild(o);
+  }
+  img.disabled = !caps.images;
+  mp3.disabled = !caps.mp3;
+  $("optNote").textContent = caps.mp3 ? "" : "Music compression needs ffmpeg (brew install ffmpeg).";
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("opts") || "{}"); } catch (e) {}
+  img.value = caps.images ? (saved.img ?? "fit") : "";
+  mp3.value = caps.mp3 ? (saved.mp3 ?? "64") : "";
+  const save = () => { try { localStorage.setItem("opts", JSON.stringify({ img: img.value, mp3: mp3.value })); } catch (e) {} };
+  img.onchange = mp3.onchange = save;
+}
+api("/api/caps").then((r) => r.json()).then(initOptions).catch(() => {});
 
 setInterval(() => fetch("/api/ping").catch(() => {}), 10000);
 fetch("/api/ping").catch(() => {});

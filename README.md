@@ -14,6 +14,7 @@ Tested with a **Motorola RAZR V3r** (firmware `R4515_G_08.BD.B3R`) on Apple Sili
 
 - macOS with [Homebrew](https://brew.sh)
 - `libusb`: `brew install libusb`
+- `ffmpeg` (optional, for MP3 compression): `brew install ffmpeg`
 - Python 3.9+ (the system `python3` works)
 - A USB data cable for the phone
 
@@ -44,8 +45,20 @@ Re-run `./make_app.sh` after changing the code.
    so names are transliterated (`Фото.jpg` → `Foto.jpg`). Existing files are never
    overwritten: a clashing name gets a suffix (`Foto_1.jpg`). Files bigger than
    the free space are refused before anything is written.
-5. Click an image to preview it.
-6. **Quit** stops the app. It also stops on its own 10 minutes after the browser
+5. **Compression on upload.** Choose it in the *When uploading* bar; the choice is
+   remembered.
+   - **Pictures:** *Fit screen 176×220* shrinks a photo to fit the V3r display.
+     *Wallpaper 176×220* scales and centre-crops to fill the screen exactly. Either
+     way the result is a baseline JPEG, and the EXIF rotation is applied. HEIC, PNG,
+     WebP, TIFF and BMP are converted too. Animated GIFs are left as they are.
+     A 3 MB phone photo ends up at about 7–15 KB.
+   - **Music:** *Compress MP3 to N kbps* re-encodes to 44.1 kHz MP3 (mono at
+     48 kbps and below), drops cover art and keeps the tags. M4A, AAC, WAV, AIFF,
+     FLAC and OGG become MP3 too. An MP3 that would only get bigger is uploaded
+     unchanged. This option needs ffmpeg (`brew install ffmpeg`).
+   The transfer log shows each file's size before and after.
+6. Click an image to preview it.
+7. **Quit** stops the app. It also stops on its own 10 minutes after the browser
    tab is closed.
 
 The app listens only on `127.0.0.1`. It rejects requests with a foreign `Host` or
@@ -61,6 +74,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./p2k get <path> [dest]      # download one file
 ./p2k pull <filter> <dir>    # download every file whose path contains filter
 ./p2k put <file> <path>      # upload (path ending in / keeps the file name)
+    [--fit | --wallpaper]    #   resize pictures to the 176x220 screen
+    [--mp3 KBPS]             #   re-encode music as MP3 (128/96/64/48/32)
 ./p2k df                     # free space per volume
 ./p2k mode                   # just switch the phone to P2K mode
 ```
@@ -69,6 +84,13 @@ Example: back up all photos:
 
 ```sh
 ./p2k pull /c/mobile/picture/ ~/Desktop/V3r_photos
+```
+
+Example: put a wallpaper and a ringtone on the phone:
+
+```sh
+./p2k put --wallpaper ~/Pictures/IMG_1234.HEIC /c/mobile/picture/
+./p2k put --mp3 64 ~/Music/song.m4a /c/mobile/audio/
 ```
 
 ## How it works

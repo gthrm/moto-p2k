@@ -21,12 +21,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usb.core  # noqa: E402
 
+import media  # noqa: E402
 import p2k  # noqa: E402
 
 PORT = 8765
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "p2k_ui.html")
 ALLOWED_HOSTS = {"127.0.0.1:%d" % PORT, "localhost:%d" % PORT}
-MAX_UPLOAD = 20 * 1024 * 1024  # the phone has a few MB of user memory at most
+MAX_UPLOAD = 200 * 1024 * 1024  # source files may be big; they are checked again after compression
 LOST = "The phone stopped responding. Unplug the cable and plug it back in."
 
 mimetypes.add_type("audio/amr", ".amr")
@@ -136,9 +137,14 @@ def unique_path(folder, name, taken):
     return path
 
 
-def write_file(folder, name, data):
+def write_file(folder, name, data, image_mode=None, mp3_kbps=None):
     if not folder.endswith("/"):
         folder += "/"
+    original = len(data)
+    try:
+        data, name = media.prepare(data, name, image_mode, mp3_kbps)
+    except media.MediaError as e:
+        raise AppError(str(e), 422)
     files = file_list()
     path = unique_path(folder, safe_name(name), {n.lower() for n, _, _ in files})
     free = free_space(refresh=True).get(path[:3])
@@ -151,7 +157,7 @@ def write_file(folder, name, data):
         state["space"] = None
     if state["files"] is not None:
         state["files"].append((path, len(data), 0))
-    return path
+    return {"path": path, "original": original, "size": len(data)}
 
 
 def delete_files(paths):
@@ -244,6 +250,9 @@ class Handler(BaseHTTPRequestHandler):
             elif route == ("GET", "/api/list"):
                 files = file_list(refresh=q.get("refresh") == "1")
                 self._json({"files": [{"path": n, "size": s, "attr": a} for n, s, a in files]})
+            elif route == ("GET", "/api/caps"):
+                self._json({"images": media.images_supported(), "mp3": media.find_ffmpeg() is not None,
+                            "screen": media.SCREEN, "bitrates": media.MP3_BITRATES})
             elif route == ("GET", "/api/space"):
                 self._json({"free": free_space(refresh=q.get("refresh") == "1")})
             elif route == ("GET", "/api/file"):
@@ -251,7 +260,11 @@ class Handler(BaseHTTPRequestHandler):
                 ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
                 self._bytes(read_file(path), ctype, os.path.basename(path), inline=q.get("inline") == "1")
             elif route == ("POST", "/api/upload"):
-                self._json({"path": write_file(q["dir"], q["name"], self._body())})
+                img = q.get("img")
+                kbps = int(q["mp3"]) if q.get("mp3") else None
+                if img and img not in media.IMAGE_MODES or kbps and kbps not in media.MP3_BITRATES:
+                    raise AppError("Unknown conversion option", 400)
+                self._json(write_file(q["dir"], q["name"], self._body(), img, kbps))
             elif route == ("POST", "/api/delete"):
                 delete_files(json.loads(self._body())["paths"])
                 self._json({"ok": True})
