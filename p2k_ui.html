@@ -107,8 +107,8 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
   <label>Videos
     <select id="optVid">
       <option value="">Keep original</option>
-      <option value="small">Convert to 3GP, small (~0.6 MB/min)</option>
-      <option value="normal">Convert to 3GP, normal (~1 MB/min)</option>
+      <option value="small">Convert to 3GP, small (~0.8 MB/min)</option>
+      <option value="normal">Convert to 3GP, normal (~1.3 MB/min)</option>
     </select>
   </label>
   <label><input type="checkbox" id="optSort" checked> Put into Photos / Ringtones / Videos by type</label>
@@ -143,6 +143,7 @@ let showSystem = false;
 try { showSystem = localStorage.getItem("sys") === "1"; } catch (e) {}
 const thumbs = new Map();
 let thumbQueue = [];
+const failedThumbs = new Set();  // previews that couldn't be made: don't ask the phone again
 let thumbBusy = false;
 let busy = 0;
 
@@ -169,6 +170,7 @@ async function api(path, opts = {}) {
 
 // thumbs holds object URLs: picture preview under the path, video poster/player under "poster:"/"video:"
 function forgetThumb(p) {
+  failedThumbs.delete(p); failedThumbs.delete("poster:" + p);
   for (const k of [p, "poster:" + p, "video:" + p]) {
     if (thumbs.has(k)) { URL.revokeObjectURL(thumbs.get(k)); thumbs.delete(k); }
   }
@@ -294,8 +296,10 @@ function render() {
     if ((IMG.test(f.path) || isVid) && thumbs.has(key)) th.innerHTML = `<img src="${thumbs.get(key)}" alt="">`;
     else {
       th.textContent = ext || "file";
-      if (IMG.test(f.path) && f.size < 400000) thumbQueue.push([f.path, th, fileBlob]);
-      if (isVid && f.size < 1500000) thumbQueue.push([f.path, th, posterBlob]);
+      if (!failedThumbs.has(key)) {
+        if (IMG.test(f.path) && f.size < 400000) thumbQueue.push([f.path, th, fileBlob, key]);
+        if (isVid && f.size < 1500000) thumbQueue.push([f.path, th, posterBlob, key]);
+      }
     }
     c.querySelector("input").onclick = (e) => { e.stopPropagation(); toggle(f.path); };
     c.onclick = (e) => {
@@ -323,12 +327,14 @@ async function pumpThumbs() {
   thumbBusy = true;
   while (thumbQueue.length) {
     if (busy) { await new Promise((r) => setTimeout(r, 500)); continue; }
-    const [p, el, getBlob] = thumbQueue.shift();
+    const [p, el, getBlob, key] = thumbQueue.shift();
+    if (failedThumbs.has(key)) continue;
     try {
       const url = await getBlob(p);
       if (el.isConnected) el.innerHTML = `<img src="${url}" alt="">`;
     } catch (e) {
       if (e.status === 503) break;  // phone gone: stop, don't hammer it
+      failedThumbs.add(key);
     }
   }
   thumbBusy = false;
@@ -510,7 +516,7 @@ async function del() {
   await load(false);
 }
 
-$("bRefresh").onclick = () => { [...thumbs.keys()].forEach(forgetThumb); load(true); };
+$("bRefresh").onclick = () => { [...thumbs.keys()].forEach(forgetThumb); failedThumbs.clear(); load(true); };
 $("bUpload").onclick = () => $("fileInput").click();
 $("fileInput").onchange = (e) => { upload(e.target.files); e.target.value = ""; };
 $("bDownload").onclick = download;

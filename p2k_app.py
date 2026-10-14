@@ -40,6 +40,8 @@ jobs = {}  # upload id -> {"stage", "done", "total", "rate", "eta"} for the prog
 # recently read files and their previews, so a video's poster and player don't read it twice
 cache = OrderedDict()  # path -> {"size": n, "raw": bytes, (preview kind): bytes}
 cache_lock = threading.Lock()
+cache_total = [0]      # bytes held in cache, kept up to date instead of re-summed
+path_locks = {}        # path -> RLock, so concurrent previews of one file share a single read
 CACHE_BYTES = 16 * 1024 * 1024
 state = {"phone": None, "files": None, "space": None, "last_ping": time.time()}
 
@@ -106,52 +108,74 @@ def file_info(path):
     raise AppError("No such file on the phone: " + path, 404)
 
 
-def _cached(path, size):
+def _entry_bytes(entry):
+    return sum(len(v) for k, v in entry.items() if k != "size")
+
+
+def _drop(path):
+    entry = cache.pop(path, None)
+    if entry:
+        cache_total[0] -= _entry_bytes(entry)
+
+
+def _cached(path, size, key):
     with cache_lock:
         entry = cache.get(path)
-        if entry and entry["size"] == size:
+        if entry and entry["size"] != size:
+            _drop(path)  # the file changed on the phone
+            return None
+        if entry and key in entry:
             cache.move_to_end(path)
-            return entry
-        cache.pop(path, None)
+            return entry[key]
         return None
 
 
 def _remember(path, size, key, data):
     with cache_lock:
         entry = cache.setdefault(path, {"size": size})
+        cache_total[0] += len(data) - len(entry.get(key, b""))
         entry[key] = data
         cache.move_to_end(path)
-        while len(cache) > 1 and sum(len(v) for e in cache.values() for k, v in e.items() if k != "size") > CACHE_BYTES:
-            cache.popitem(last=False)
+        while len(cache) > 1 and cache_total[0] > CACHE_BYTES:
+            _drop(next(iter(cache)))
 
 
 def forget(path):
     with cache_lock:
-        cache.pop(path, None)
+        _drop(path)
+
+
+def _path_lock(path):
+    with cache_lock:
+        return path_locks.setdefault(path, threading.RLock())
 
 
 def read_file(path):
     name, size, attr = file_info(path)
-    entry = _cached(name, size)
-    if entry and "raw" in entry:
-        return entry["raw"]
-    data = with_phone(lambda ph: ph.read_all(name, size, attr))
-    _remember(name, size, "raw", data)
-    return data
+    return with_phone(lambda ph: ph.read_all(name, size, attr))
 
 
 def preview(path, kind):
-    """kind: 'poster' (JPEG frame) or 'video' (browser-playable MP4) for a phone video."""
-    name, size, _ = file_info(path)
-    entry = _cached(name, size)
-    if entry and kind in entry:
-        return entry[kind]
-    try:
-        data = media.video_preview(read_file(path), name, poster=(kind == "poster"))
-    except media.MediaError as e:
-        raise AppError(str(e), 415)
-    _remember(name, size, kind, data)
-    return data
+    """kind: 'poster' (JPEG frame) or 'video' (browser-playable MP4) for a phone video.
+
+    Previews and the raw bytes behind them are cached, and one lock per file makes a
+    poster and a player requested together share a single USB read.
+    """
+    name, size, attr = file_info(path)
+    with _path_lock(name):
+        data = _cached(name, size, kind)
+        if data is not None:
+            return data
+        raw = _cached(name, size, "raw")
+        if raw is None:
+            raw = with_phone(lambda ph: ph.read_all(name, size, attr))
+            _remember(name, size, "raw", raw)
+        try:
+            data = media.video_preview(raw, name, poster=(kind == "poster"))
+        except media.MediaError as e:
+            raise AppError(str(e), 415)
+        _remember(name, size, kind, data)
+        return data
 
 
 def unique_path(folder, name, taken):
@@ -169,10 +193,6 @@ def job_update(job, **kw):
 
 
 def write_file(folder, name, data, image_mode=None, mp3_kbps=None, video_quality=None, sort=False, job=None):
-    if sort and media.kind(name) in FOLDERS:
-        # same volume as the open folder (memory card stays on the card), never /a
-        vol = folder[:3] if folder[:3] in ("/b/", "/c/") else "/c/"
-        folder = vol + FOLDERS[media.kind(name)]
     if not folder.endswith("/"):
         folder += "/"
     original = len(data)
@@ -183,6 +203,11 @@ def write_file(folder, name, data, image_mode=None, mp3_kbps=None, video_quality
                                    video_quality=video_quality, on_progress=on_progress)
     except media.MediaError as e:
         raise AppError(str(e), 422)
+    # sort by what is uploaded (after conversion): a kept .mkv isn't a phone video
+    if sort and media.kind(name) in FOLDERS:
+        # same volume as the open folder (memory card stays on the card), never /a
+        vol = folder[:3] if folder[:3] in ("/b/", "/c/") else "/c/"
+        folder = vol + FOLDERS[media.kind(name)]
     job_update(job, stage="waiting", done=0, total=len(data))
     files = file_list()
     path = unique_path(folder, p2k.safe_name(name), {n.lower() for n, _, _ in files})
@@ -190,6 +215,7 @@ def write_file(folder, name, data, image_mode=None, mp3_kbps=None, video_quality
     if free is not None and len(data) > free:
         raise AppError("Not enough space on the phone: %s needs %s, only %s free"
                        % (name, p2k.human(len(data)), p2k.human(free)), 507)
+
     def go(ph):
         start = time.time()
 
@@ -303,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"files": [{"path": n, "size": s, "attr": a} for n, s, a in files]})
             elif route == ("GET", "/api/caps"):
                 self._json({"images": media.images_supported(), "mp3": media.find_ffmpeg() is not None,
-                            "video": media.video_supported(), "video_preview": media.find_ffmpeg() is not None,
+                            "video": media.video_supported(), "video_preview": media.video_preview_supported(),
                             "screen": media.SCREEN, "bitrates": media.MP3_BITRATES})
             elif route == ("GET", "/api/progress"):
                 self._json(jobs.get(q.get("job"), {}))

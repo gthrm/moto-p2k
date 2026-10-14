@@ -55,16 +55,19 @@ the code.
 3. **Preview.** Click a picture to see it full size. JPEG, GIF, PNG and BMP work, as
    do the phone's own `.emp` files (GIF animations) and `.ems` files (EMS
    bitmaps, converted to PNG for display). Phone videos (`.3gp`, `.mp4`) get a
-   poster frame in the grid. Clicking one plays it: browsers can't play the phone's
-   MPEG-4/AMR video, so the app converts it to H.264/AAC on the fly. Downloads
-   always give the original file.
+   poster frame in the grid. To save USB time, thumbnails load only for pictures
+   under 400 KB and videos under 1.5 MB. Clicking one plays it: browsers can't play the phone's
+   MPEG-4/AMR video, so the app converts it to H.264/AAC on the fly. The poster and
+   the player share one read from the phone. Downloads always give the original file.
 4. **Phone → Mac.** Select files and click **Download**. One file is saved as it
    is; several files come as `V3r_files.zip`. Both go to your browser's Downloads
    folder.
 5. **Mac → phone.** Drag files into the window or click **Upload to phone…**.
    - **Where files go.** With *Put into Photos / Ringtones / Videos by type* ticked
      (the default), pictures go to `mobile/picture`, music to `mobile/audio` and
-     video to `mobile/video`, whichever folder is open. The phone only lists
+     phone videos (`.3gp`, `.mp4`) to `mobile/video`, whichever folder is open.
+     Sorting looks at the file as it is uploaded, after any conversion. A `.mov` or
+     `.mkv` uploaded unconverted is not a phone video, so it stays in the open folder. The phone only lists
      ringtones from the audio folder. Files stay on the open folder's volume (phone
      or memory card). Anything else, or everything when the box is unticked, goes
      into the open folder.
@@ -94,9 +97,13 @@ the code.
    - **Videos.** *Convert to 3GP* turns MP4, MOV, MKV, AVI, WebM and others into
      what the phone records itself: 3GP, MPEG-4 Simple Profile 176×144, AMR-NB
      12.2 kbps 8 kHz mono.
-     - *small* is 64 kbps at 12 fps, about 0.6 MB per minute.
-     - *normal* is 128 kbps at 15 fps, about 1 MB per minute.
+     - *small* targets 64 kbps at 12 fps, about 0.8 MB per minute in practice.
+     - *normal* targets 128 kbps at 15 fps, about 1.3 MB per minute in practice.
      - The picture is letterboxed to keep its shape; rotation metadata is applied.
+     - A file that already is a phone-ready 3GP (MPEG-4 or H.263 at up to 176×144,
+       with AMR or no sound) is uploaded unchanged, not re-encoded.
+     - A video with a sound track that can't be converted is refused, never
+       uploaded silent. A file with no video track is refused too.
      - Needs ffmpeg and opencore-amr.
 
    The transfer log shows each file's size before and after.
@@ -146,8 +153,7 @@ Example: put a wallpaper and a ringtone on the phone:
 | File           | What it is                                                    |
 |----------------|---------------------------------------------------------------|
 | `p2k.py`       | P2K protocol, file-name rules and the CLI                     |
-| `media.py`     | Picture/MP3/video conversion, AMR encoding, video previews,   |
-|                | EMS decoding, image type sniffing                             |
+| `media.py`     | Conversions, AMR encoding, video previews, EMS decoding       |
 | `p2k_app.py`   | Local HTTP server behind the app                              |
 | `p2k_ui.html`  | The app's UI                                                  |
 | `make_app.sh`  | Builds `~/Applications/Moto P2K.app`                          |
@@ -201,7 +207,7 @@ Unplugging the cable puts the phone back into normal mode.
   It didn't happen again with the current code. Unplugging and replugging the
   cable fixes it. The app detects this case and asks you to replug.
 - USB 1.1 full speed plus a 1 KB-per-request protocol makes transfers slow:
-  about 30 KB/s when writing to a V3r.
+  about 30 KB/s when writing to a V3r, and somewhat faster when reading.
 - Only tested on the V3r, and without a memory card. Other P2K phones (V3, V3i,
   E398, L7, …) use the same protocol, but their USB IDs or volume layout may differ.
 
