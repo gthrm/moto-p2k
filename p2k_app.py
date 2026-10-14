@@ -14,6 +14,7 @@ import time
 import urllib.parse
 import webbrowser
 import zipfile
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,10 @@ FOLDERS = {"picture": "mobile/picture/", "music": "mobile/audio/", "video": "mob
 
 lock = threading.Lock()
 jobs = {}  # upload id -> {"stage", "done", "total", "rate", "eta"} for the progress display
+# recently read files and their previews, so a video's poster and player don't read it twice
+cache = OrderedDict()  # path -> {"size": n, "raw": bytes, (preview kind): bytes}
+cache_lock = threading.Lock()
+CACHE_BYTES = 16 * 1024 * 1024
 state = {"phone": None, "files": None, "space": None, "last_ping": time.time()}
 
 
@@ -101,9 +106,52 @@ def file_info(path):
     raise AppError("No such file on the phone: " + path, 404)
 
 
+def _cached(path, size):
+    with cache_lock:
+        entry = cache.get(path)
+        if entry and entry["size"] == size:
+            cache.move_to_end(path)
+            return entry
+        cache.pop(path, None)
+        return None
+
+
+def _remember(path, size, key, data):
+    with cache_lock:
+        entry = cache.setdefault(path, {"size": size})
+        entry[key] = data
+        cache.move_to_end(path)
+        while len(cache) > 1 and sum(len(v) for e in cache.values() for k, v in e.items() if k != "size") > CACHE_BYTES:
+            cache.popitem(last=False)
+
+
+def forget(path):
+    with cache_lock:
+        cache.pop(path, None)
+
+
 def read_file(path):
     name, size, attr = file_info(path)
-    return with_phone(lambda ph: ph.read_all(name, size, attr))
+    entry = _cached(name, size)
+    if entry and "raw" in entry:
+        return entry["raw"]
+    data = with_phone(lambda ph: ph.read_all(name, size, attr))
+    _remember(name, size, "raw", data)
+    return data
+
+
+def preview(path, kind):
+    """kind: 'poster' (JPEG frame) or 'video' (browser-playable MP4) for a phone video."""
+    name, size, _ = file_info(path)
+    entry = _cached(name, size)
+    if entry and kind in entry:
+        return entry[kind]
+    try:
+        data = media.video_preview(read_file(path), name, poster=(kind == "poster"))
+    except media.MediaError as e:
+        raise AppError(str(e), 415)
+    _remember(name, size, kind, data)
+    return data
 
 
 def unique_path(folder, name, taken):
@@ -120,7 +168,7 @@ def job_update(job, **kw):
         jobs.setdefault(job, {}).update(kw)
 
 
-def write_file(folder, name, data, image_mode=None, mp3_kbps=None, sort=False, job=None):
+def write_file(folder, name, data, image_mode=None, mp3_kbps=None, video_quality=None, sort=False, job=None):
     if sort and media.kind(name) in FOLDERS:
         # same volume as the open folder (memory card stays on the card), never /a
         vol = folder[:3] if folder[:3] in ("/b/", "/c/") else "/c/"
@@ -131,7 +179,8 @@ def write_file(folder, name, data, image_mode=None, mp3_kbps=None, sort=False, j
     job_update(job, stage="compressing", done=0, total=0)
     try:
         on_progress = (lambda f: job_update(job, done=int(f * 1000), total=1000)) if job else None
-        data, name = media.prepare(data, name, image_mode, mp3_kbps, on_progress)
+        data, name = media.prepare(data, name, image_mode=image_mode, mp3_kbps=mp3_kbps,
+                                   video_quality=video_quality, on_progress=on_progress)
     except media.MediaError as e:
         raise AppError(str(e), 422)
     job_update(job, stage="waiting", done=0, total=len(data))
@@ -155,6 +204,7 @@ def write_file(folder, name, data, image_mode=None, mp3_kbps=None, sort=False, j
         with_phone(go)
     finally:
         state["space"] = None
+    forget(path)
     if state["files"] is not None:
         state["files"].append((path, len(data), 0))
     return {"path": path, "original": original, "size": len(data)}
@@ -164,6 +214,7 @@ def delete_files(paths):
     def go(ph):
         for p in paths:
             ph.delete(p)
+            forget(p)
             if state["files"] is not None:
                 state["files"] = [f for f in state["files"] if f[0] != p]
             time.sleep(0.3)
@@ -252,6 +303,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"files": [{"path": n, "size": s, "attr": a} for n, s, a in files]})
             elif route == ("GET", "/api/caps"):
                 self._json({"images": media.images_supported(), "mp3": media.find_ffmpeg() is not None,
+                            "video": media.video_supported(), "video_preview": media.find_ffmpeg() is not None,
                             "screen": media.SCREEN, "bitrates": media.MP3_BITRATES})
             elif route == ("GET", "/api/progress"):
                 self._json(jobs.get(q.get("job"), {}))
@@ -259,8 +311,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"free": free_space(refresh=q.get("refresh") == "1")})
             elif route == ("GET", "/api/file"):
                 path = q["path"]
-                data = read_file(path)
-                ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                if q.get("preview") in ("poster", "video"):
+                    data = preview(path, q["preview"])
+                    ctype = "image/jpeg" if q["preview"] == "poster" else "video/mp4"
+                else:
+                    data = read_file(path)
+                    ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
                 if q.get("preview") == "1":
                     # show what's really inside: .emp files are GIFs, .ems are EMS bitmaps
                     if path.lower().endswith(".ems"):
@@ -274,11 +330,13 @@ class Handler(BaseHTTPRequestHandler):
             elif route == ("POST", "/api/upload"):
                 img = q.get("img")
                 kbps = int(q["mp3"]) if q.get("mp3") else None
-                if img and img not in media.IMAGE_MODES or kbps and kbps not in media.MP3_BITRATES:
+                video = q.get("video") or None
+                if img and img not in media.IMAGE_MODES or kbps and kbps not in media.MP3_BITRATES \
+                        or video and video not in media.VIDEO_QUALITY:
                     raise AppError("Unknown conversion option", 400)
                 job = q.get("job")
                 try:
-                    self._json(write_file(q["dir"], q["name"], self._body(), img, kbps,
+                    self._json(write_file(q["dir"], q["name"], self._body(), img, kbps, video,
                                           sort=q.get("sort") == "1", job=job))
                 finally:
                     jobs.pop(job, None)

@@ -7,9 +7,11 @@ no Windows-only tools.
 It's a small Mac app with a file browser. You can:
 
 - drag files onto the phone, with live progress;
-- shrink pictures to the 176×220 screen and re-encode music as small MP3s on the way;
+- shrink pictures to the 176×220 screen, re-encode music as small MP3s and convert
+  any video to a 3GP the phone plays, all on the way;
 - download photos (one at a time or as a zip);
-- preview images, including the phone's own `.emp` and `.ems` pictures;
+- preview images, including the phone's own `.emp` and `.ems` pictures, and play
+  the phone's 3GP videos in the browser;
 - delete files and see free space.
 
 A command-line tool covers scripting.
@@ -22,7 +24,10 @@ Tested with a **Motorola RAZR V3r** (firmware `R4515_G_08.BD.B3R`) on Apple Sili
 - `libusb`: `brew install libusb`
 - Python **3.10 or newer**, e.g. `brew install python`. The `/usr/bin/python3` that
   ships with macOS is 3.9 and is too old for Pillow 12.
-- `ffmpeg`, optional, for MP3 compression: `brew install ffmpeg`
+- `ffmpeg`, optional, for MP3/video conversion and video previews: `brew install ffmpeg`
+- `opencore-amr`, optional, for video conversion: `brew install opencore-amr`. Homebrew's
+  ffmpeg can't encode AMR, the sound format the phone's videos use, so the app
+  calls this library directly.
 - A USB data cable for the phone
 
 ## Install the app
@@ -49,7 +54,10 @@ the code.
    too. The header shows the free space on the open volume, in orange below 300 KB.
 3. **Preview.** Click a picture to see it full size. JPEG, GIF, PNG and BMP work, as
    do the phone's own `.emp` files (GIF animations) and `.ems` files (EMS
-   bitmaps, converted to PNG for display).
+   bitmaps, converted to PNG for display). Phone videos (`.3gp`, `.mp4`) get a
+   poster frame in the grid. Clicking one plays it: browsers can't play the phone's
+   MPEG-4/AMR video, so the app converts it to H.264/AAC on the fly. Downloads
+   always give the original file.
 4. **Phone → Mac.** Select files and click **Download**. One file is saved as it
    is; several files come as `V3r_files.zip`. Both go to your browser's Downloads
    folder.
@@ -83,6 +91,13 @@ the code.
      - M4A, AAC, WAV, AIFF, FLAC and OGG become MP3 too.
      - An MP3 that would only get bigger is uploaded unchanged.
      - Needs ffmpeg.
+   - **Videos.** *Convert to 3GP* turns MP4, MOV, MKV, AVI, WebM and others into
+     what the phone records itself: 3GP, MPEG-4 Simple Profile 176×144, AMR-NB
+     12.2 kbps 8 kHz mono.
+     - *small* is 64 kbps at 12 fps, about 0.6 MB per minute.
+     - *normal* is 128 kbps at 15 fps, about 1 MB per minute.
+     - The picture is letterboxed to keep its shape; rotation metadata is applied.
+     - Needs ffmpeg and opencore-amr.
 
    The transfer log shows each file's size before and after.
 7. **Quit.** **Quit** stops the app. It also stops on its own 10 minutes after the
@@ -103,6 +118,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./p2k put <file> <path>      # upload (path ending in / keeps the file name)
     [--fit | --wallpaper]    #   resize pictures to the 176x220 screen
     [--mp3 KBPS]             #   re-encode music as MP3 (128/96/64/48/32)
+    [--video small|normal]   #   convert video to 3GP 176x144 (MPEG-4 + AMR)
 ./p2k df                     # free space per volume
 ./p2k volumes                # list volumes
 ./p2k mode                   # just switch the phone to P2K mode
@@ -122,6 +138,7 @@ Example: put a wallpaper and a ringtone on the phone:
 ```sh
 ./p2k put --wallpaper ~/Pictures/IMG_1234.HEIC /c/mobile/picture/
 ./p2k put --mp3 64 ~/Music/song.m4a /c/mobile/audio/
+./p2k put --video small ~/Movies/clip.mov /c/mobile/video/
 ```
 
 ## Files
@@ -129,7 +146,8 @@ Example: put a wallpaper and a ringtone on the phone:
 | File           | What it is                                                    |
 |----------------|---------------------------------------------------------------|
 | `p2k.py`       | P2K protocol, file-name rules and the CLI                     |
-| `media.py`     | Picture/MP3 conversion, EMS decoding, image type sniffing     |
+| `media.py`     | Picture/MP3/video conversion, AMR encoding, video previews,   |
+|                | EMS decoding, image type sniffing                             |
 | `p2k_app.py`   | Local HTTP server behind the app                              |
 | `p2k_ui.html`  | The app's UI                                                  |
 | `make_app.sh`  | Builds `~/Applications/Moto P2K.app`                          |
@@ -167,6 +185,10 @@ separated by `U+FFFE`.
 Reply type `0x60` means success. `0x70` means the request was rejected, for example
 because the file or folder doesn't exist. `0x80` carries data, and its first byte is
 a status (`0` = OK).
+
+Videos the phone records, like the bundled `HELLOMOTO.3gp`, are 3GP files with
+MPEG-4 Part 2 Simple Profile video at 176×144 and 15 fps (about 130 kbps), plus
+AMR-NB audio at 8 kHz mono and 12.2 kbps. The converter produces the same format.
 
 `.ems` pictures are 3 header bytes (`04`, width, height), then 6 bits per pixel
 (2 bits each for R, G and B), packed MSB first. The stock ones are 32×32.

@@ -45,6 +45,8 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 .card.sel { outline: 2px solid var(--accent); background: var(--sel); }
 .thumb { height: 100px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--bg); overflow: hidden; font-size: 13px; color: var(--muted); font-weight: 600; }
 .thumb img { max-width: 100%; max-height: 100%; }
+.thumb { position: relative; }
+.thumb.video::after { content: "▶"; position: absolute; right: 6px; bottom: 4px; font-size: 14px; color: #fff; text-shadow: 0 0 4px rgba(0,0,0,.8); }
 .name { font-size: 12px; margin-top: 6px; word-break: break-all; }
 .size { font-size: 11px; color: var(--muted); }
 .card input { position: absolute; top: 12px; left: 12px; }
@@ -70,6 +72,8 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 #viewer { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 20; flex-direction: column; gap: 12px; color: #fff; }
 #viewer.on { display: flex; }
 #viewer img { max-width: 90vw; max-height: 80vh; image-rendering: pixelated; min-width: 320px; }
+#viewer video { width: min(90vw, 528px); max-height: 80vh; background: #000; }
+#viewer [hidden] { display: none; }
 @media (max-width: 640px) { nav { width: 150px; } }
 </style>
 </head>
@@ -100,6 +104,13 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
       <option value="">Keep original</option>
     </select>
   </label>
+  <label>Videos
+    <select id="optVid">
+      <option value="">Keep original</option>
+      <option value="small">Convert to 3GP, small (~0.6 MB/min)</option>
+      <option value="normal">Convert to 3GP, normal (~1 MB/min)</option>
+    </select>
+  </label>
   <label><input type="checkbox" id="optSort" checked> Put into Photos / Ringtones / Videos by type</label>
   <span class="note" id="optNote"></span>
 </div>
@@ -110,7 +121,7 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 </main>
 <div id="drop">Drop to upload to the phone</div>
 <div id="log"><div class="head"><span id="logTitle">Transfer</span><a href="#" id="logClose">×</a></div><div id="logRows"></div></div>
-<div id="viewer"><img id="vImg" alt=""><div id="vName"></div><div><button id="vSave">Download</button> <button id="vClose">Close</button></div></div>
+<div id="viewer"><img id="vImg" alt=""><video id="vVid" controls playsinline hidden></video><div id="vName"></div><div><button id="vSave">Download</button> <button id="vClose">Close</button></div></div>
 
 <script>
 const PLACES = [
@@ -121,8 +132,10 @@ const PLACES = [
 ];
 const VOLS = { "/c/": "Phone", "/b/": "Memory card", "/a/": "System" };
 const IMG = /\.(jpe?g|gif|png|bmp|emp|ems)$/i;  // .emp = GIF, .ems = EMS bitmap (converted for preview)
+const VID = /\.(3gp|3g2|mp4)$/i;  // phone videos: previewed as a server-made MP4 and poster frame
 
 let files = [];
+let videoPreview = false;
 let space = {};
 let cur = "/c/mobile/picture/";
 let selected = new Set();
@@ -154,17 +167,24 @@ async function api(path, opts = {}) {
   return r;
 }
 
+// thumbs holds object URLs: picture preview under the path, video poster/player under "poster:"/"video:"
 function forgetThumb(p) {
-  if (thumbs.has(p)) { URL.revokeObjectURL(thumbs.get(p)); thumbs.delete(p); }
+  for (const k of [p, "poster:" + p, "video:" + p]) {
+    if (thumbs.has(k)) { URL.revokeObjectURL(thumbs.get(k)); thumbs.delete(k); }
+  }
 }
 
-async function fileBlob(p) {
-  if (!thumbs.has(p)) {
-    const b = await (await api("/api/file?inline=1&preview=1&path=" + encodeURIComponent(p))).blob();
-    thumbs.set(p, URL.createObjectURL(b));
+async function blobFor(key, url) {
+  if (!thumbs.has(key)) {
+    const b = await (await api(url)).blob();
+    thumbs.set(key, URL.createObjectURL(b));
   }
-  return thumbs.get(p);
+  return thumbs.get(key);
 }
+
+const fileBlob = (p) => blobFor(p, "/api/file?inline=1&preview=1&path=" + encodeURIComponent(p));
+const posterBlob = (p) => blobFor("poster:" + p, "/api/file?inline=1&preview=poster&path=" + encodeURIComponent(p));
+const videoBlob = (p) => blobFor("video:" + p, "/api/file?inline=1&preview=video&path=" + encodeURIComponent(p));
 
 async function status() {
   try {
@@ -268,12 +288,19 @@ function render() {
     c.innerHTML = `<input type="checkbox" ${selected.has(f.path) ? "checked" : ""}><div class="thumb"></div><div class="name"></div><div class="size">${fmt(f.size)}</div>`;
     c.querySelector(".name").textContent = base(f.path);
     const th = c.querySelector(".thumb");
-    if (IMG.test(f.path) && thumbs.has(f.path)) th.innerHTML = `<img src="${thumbs.get(f.path)}" alt="">`;
-    else { th.textContent = ext || "file"; if (IMG.test(f.path) && f.size < 400000) thumbQueue.push([f.path, th]); }
+    const isVid = VID.test(f.path) && videoPreview;
+    if (isVid) th.classList.add("video");
+    const key = isVid ? "poster:" + f.path : f.path;
+    if ((IMG.test(f.path) || isVid) && thumbs.has(key)) th.innerHTML = `<img src="${thumbs.get(key)}" alt="">`;
+    else {
+      th.textContent = ext || "file";
+      if (IMG.test(f.path) && f.size < 400000) thumbQueue.push([f.path, th, fileBlob]);
+      if (isVid && f.size < 1500000) thumbQueue.push([f.path, th, posterBlob]);
+    }
     c.querySelector("input").onclick = (e) => { e.stopPropagation(); toggle(f.path); };
     c.onclick = (e) => {
       if (e.metaKey || e.shiftKey) { toggle(f.path); return; }
-      if (IMG.test(f.path)) openViewer(f.path); else toggle(f.path);
+      if (IMG.test(f.path) || (VID.test(f.path) && videoPreview)) openViewer(f.path); else toggle(f.path);
     };
     grid.appendChild(c);
   }
@@ -296,9 +323,9 @@ async function pumpThumbs() {
   thumbBusy = true;
   while (thumbQueue.length) {
     if (busy) { await new Promise((r) => setTimeout(r, 500)); continue; }
-    const [p, el] = thumbQueue.shift();
+    const [p, el, getBlob] = thumbQueue.shift();
     try {
-      const url = await fileBlob(p);
+      const url = await getBlob(p);
       if (el.isConnected) el.innerHTML = `<img src="${url}" alt="">`;
     } catch (e) {
       if (e.status === 503) break;  // phone gone: stop, don't hammer it
@@ -318,9 +345,22 @@ function saveBlob(blob, name) {
 let viewing = null;
 async function openViewer(p) {
   viewing = p;
+  const isVid = VID.test(p);
+  $("vImg").hidden = isVid;
+  $("vVid").hidden = !isVid;
+  $("viewer").classList.add("on");
+  if (isVid) {
+    const v = $("vVid");
+    v.poster = thumbs.get("poster:" + p) || "";
+    $("vName").textContent = base(p) + " · preparing video…";
+    try {
+      const url = await videoBlob(p);
+      if (viewing === p) { v.src = url; v.play().catch(() => {}); $("vName").textContent = base(p); }
+    } catch (e) { showErr(e.message); $("vName").textContent = base(p); }
+    return;
+  }
   $("vName").textContent = base(p);
   $("vImg").src = thumbs.get(p) || "";
-  $("viewer").classList.add("on");
   if (!thumbs.has(p)) {
     try {
       const url = await fileBlob(p);
@@ -328,13 +368,17 @@ async function openViewer(p) {
     } catch (e) { showErr(e.message); }
   }
 }
-$("vClose").onclick = () => { $("viewer").classList.remove("on"); viewing = null; };
+$("vClose").onclick = () => {
+  const v = $("vVid");
+  v.pause(); v.removeAttribute("src"); v.load();
+  $("viewer").classList.remove("on"); viewing = null;
+};
 $("viewer").onclick = (e) => { if (e.target.id === "viewer") $("vClose").onclick(); };
 $("vSave").onclick = async () => {
   const p = viewing;
   try {
-    // the cached preview of an .ems file is a PNG, so fetch the original for saving
-    const r = /\.ems$/i.test(p) ? await api("/api/file?path=" + encodeURIComponent(p)) : await fetch(await fileBlob(p));
+    // .ems and video previews are converted, so fetch the original file for saving
+    const r = /\.ems$/i.test(p) || VID.test(p) ? await api("/api/file?path=" + encodeURIComponent(p)) : await fetch(await fileBlob(p));
     saveBlob(await r.blob(), base(p));
   } catch (e) { showErr(e.message); }
 };
@@ -378,7 +422,7 @@ function describe(p) {
 function sendFile(file, set) {
   const job = Math.random().toString(36).slice(2);
   const q = new URLSearchParams({
-    dir: cur, name: file.name, img: $("optImg").value, mp3: $("optMp3").value,
+    dir: cur, name: file.name, img: $("optImg").value, mp3: $("optMp3").value, video: $("optVid").value,
     sort: $("optSort").checked ? "1" : "0", job,
   });
   return new Promise((resolve, reject) => {
@@ -480,7 +524,8 @@ window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("drop").classList.remove("on"); upload(e.dataTransfer.files); });
 
 function initOptions(caps) {
-  const img = $("optImg"), mp3 = $("optMp3");
+  const img = $("optImg"), mp3 = $("optMp3"), vid = $("optVid");
+  videoPreview = !!caps.video_preview;
   for (const k of caps.bitrates) {
     const o = document.createElement("option");
     o.value = k; o.textContent = `Compress MP3 to ${k} kbps` + (k <= 48 ? " mono" : "");
@@ -488,14 +533,18 @@ function initOptions(caps) {
   }
   img.disabled = !caps.images;
   mp3.disabled = !caps.mp3;
-  $("optNote").textContent = caps.mp3 ? "" : "Music compression needs ffmpeg (brew install ffmpeg).";
+  vid.disabled = !caps.video;
+  $("optNote").textContent = !caps.mp3 ? "Music and video conversion need ffmpeg (brew install ffmpeg)."
+    : !caps.video ? "Video conversion needs the AMR encoder (brew install opencore-amr)." : "";
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("opts") || "{}"); } catch (e) {}
   img.value = caps.images ? (saved.img ?? "fit") : "";
   mp3.value = caps.mp3 ? (saved.mp3 ?? "64") : "";
+  vid.value = caps.video ? (saved.vid ?? "normal") : "";
   $("optSort").checked = saved.sort ?? true;
-  const save = () => { try { localStorage.setItem("opts", JSON.stringify({ img: img.value, mp3: mp3.value, sort: $("optSort").checked })); } catch (e) {} };
-  img.onchange = mp3.onchange = $("optSort").onchange = save;
+  const save = () => { try { localStorage.setItem("opts", JSON.stringify({ img: img.value, mp3: mp3.value, vid: vid.value, sort: $("optSort").checked })); } catch (e) {} };
+  img.onchange = mp3.onchange = vid.onchange = $("optSort").onchange = save;
+  if (files.length) render();  // video posters depend on caps
 }
 api("/api/caps").then((r) => r.json()).then(initOptions).catch(() => {});
 

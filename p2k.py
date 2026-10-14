@@ -9,6 +9,7 @@ Protocol based on libp2kmoto 0.1 (Dmitry Nezhevenko, GPL) and p2k-core.
   ./p2k put <file> <path>       upload a file to the phone (e.g. /c/mobile/audio/x.mp3)
         [--fit | --wallpaper]     resize pictures to the 176x220 screen (wallpaper = crop)
         [--mp3 KBPS]              re-encode music as MP3 (128, 96, 64, 48 or 32 kbps)
+        [--video small|normal]    convert video to a 3GP the phone plays (176x144)
   ./p2k df                      free space per volume
   ./p2k mode                    just switch the phone to P2K mode
 """
@@ -317,7 +318,7 @@ def find(files, path):
 
 
 def put_args(args):
-    """put [--fit | --wallpaper] [--mp3 KBPS] <file> <path>"""
+    """put [--fit | --wallpaper] [--mp3 KBPS] [--video small|normal] <file> <path>"""
     import media
     opts, rest = {}, []
     it = iter(args)
@@ -326,6 +327,11 @@ def put_args(args):
             opts["image_mode"] = "fit"
         elif a == "--wallpaper":
             opts["image_mode"] = "fill"
+        elif a == "--video":
+            q = next(it, "")
+            if q not in media.VIDEO_QUALITY:
+                raise P2KError("--video must be one of %s" % ", ".join(media.VIDEO_QUALITY))
+            opts["video_quality"] = q
         elif a == "--mp3":
             kbps = next(it, "")
             kbps = int(kbps) if kbps.isdigit() else 0
@@ -335,7 +341,7 @@ def put_args(args):
         else:
             rest.append(a)
     if len(rest) != 2:
-        raise P2KError("usage: put [--fit | --wallpaper] [--mp3 KBPS] <file> <path>")
+        raise P2KError("usage: put [--fit | --wallpaper] [--mp3 KBPS] [--video small|normal] <file> <path>")
     return rest[0], rest[1], opts
 
 
