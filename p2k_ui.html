@@ -56,6 +56,10 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
 #log .row { padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
 #log .row .st { color: var(--muted); white-space: nowrap; }
 #log .row .st.ok { color: var(--ok); } #log .row .st.err { color: var(--danger); }
+#log .row { flex-wrap: wrap; }
+#log .row .bar { flex-basis: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; display: none; }
+#log .row .bar.on { display: block; }
+#log .row .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 #log .head { padding: 8px 12px; font-weight: 600; display: flex; justify-content: space-between; }
 #opts { display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 #opts label { display: flex; align-items: center; gap: 6px; }
@@ -96,6 +100,7 @@ section { flex: 1; overflow: auto; padding: 14px 16px 80px; position: relative; 
       <option value="">Keep original</option>
     </select>
   </label>
+  <label><input type="checkbox" id="optSort" checked> Put into Photos / Ringtones / Videos by type</label>
   <span class="note" id="optNote"></span>
 </div>
 <div id="err"></div>
@@ -337,10 +342,64 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("vClose"
 function logStart(title) { $("logTitle").textContent = title; $("logRows").innerHTML = ""; $("log").classList.add("on"); }
 function logRow(name) {
   const r = document.createElement("div"); r.className = "row";
-  r.innerHTML = `<span></span><span class="st">waiting</span>`;
+  r.innerHTML = `<span></span><span class="st">waiting</span><div class="bar"><i></i></div>`;
   r.firstChild.textContent = name;
   $("logRows").appendChild(r);
-  return (t, cls) => { r.lastChild.textContent = t; r.lastChild.className = "st " + (cls || ""); };
+  const st = r.children[1], bar = r.children[2];
+  // set(text, cls, fraction): fraction 0..1 shows the bar, null hides it
+  return (t, cls, frac = null) => {
+    st.textContent = t; st.className = "st " + (cls || "");
+    bar.classList.toggle("on", frac != null);
+    if (frac != null) bar.firstChild.style.width = Math.round(frac * 100) + "%";
+  };
+}
+
+const secs = (s) => s == null ? "" : s < 60 ? `${Math.ceil(s)} s` : `${Math.floor(s / 60)} min ${Math.ceil(s % 60)} s`;
+
+function describe(p) {
+  if (p.stage === "compressing") return p.total ? [`compressing ${Math.round(p.done / p.total * 100)}%`, p.done / p.total] : ["compressing…", null];
+  if (p.stage === "waiting") return ["waiting for the phone…", 0];
+  if (p.stage === "writing" && p.total) {
+    const f = p.done / p.total;
+    const speed = p.rate ? ` · ${fmt(p.rate)}/s` : "";
+    const left = p.eta != null && p.done ? ` · ${secs(p.eta)} left` : "";
+    return [`to phone ${Math.round(f * 100)}% · ${fmt(p.done)} of ${fmt(p.total)}${speed}${left}`, f];
+  }
+  return null;
+}
+
+// POST one file with real progress: sending to the app (XHR), then compressing and
+// writing to the phone (polled from /api/progress while the request is open)
+function sendFile(file, set) {
+  const job = Math.random().toString(36).slice(2);
+  const q = new URLSearchParams({
+    dir: cur, name: file.name, img: $("optImg").value, mp3: $("optMp3").value,
+    sort: $("optSort").checked ? "1" : "0", job,
+  });
+  return new Promise((resolve, reject) => {
+    let poll = null;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload?" + q);
+    xhr.setRequestHeader("X-P2K", "1");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) set(`sending ${Math.round(e.loaded / e.total * 100)}%`, "", e.loaded / e.total); };
+    xhr.upload.onload = () => {
+      set("preparing…", "", null);
+      poll = setInterval(async () => {
+        try {
+          const d = describe(await (await fetch("/api/progress?job=" + job)).json());
+          if (d && xhr.readyState !== 4) set(d[0], "", d[1]);
+        } catch (e) {}
+      }, 400);
+    };
+    xhr.onloadend = () => {
+      clearInterval(poll);
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 200) resolve(body);
+      else reject(new Error(body.error || (xhr.status ? "Error " + xhr.status : "The app is not running")));
+    };
+    xhr.send(file);
+  });
 }
 $("logClose").onclick = (e) => { e.preventDefault(); $("log").classList.remove("on"); };
 
@@ -366,18 +425,21 @@ async function upload(fileList) {
   const list = [...fileList];
   if (!list.length) return;
   busy++;
-  logStart("To phone → " + cur);
+  logStart($("optSort").checked ? "Uploading to phone" : "To phone → " + cur);
   const rows = list.map((f) => logRow(f.name));
+  let last = null;
   for (let i = 0; i < list.length; i++) {
-    rows[i]("uploading…");
+    $("logTitle").textContent = `Uploading ${i + 1} of ${list.length}`;
     try {
-      const q = new URLSearchParams({ dir: cur, name: list[i].name, img: $("optImg").value, mp3: $("optMp3").value });
-      const res = await (await api("/api/upload?" + q, { method: "POST", body: list[i] })).json();
+      const res = await sendFile(list[i], rows[i]);
       forgetThumb(res.path);
+      last = res.path;
       const shrunk = res.size < res.original ? ` · ${fmt(res.original)} → ${fmt(res.size)}` : "";
-      rows[i]((base(res.path) === list[i].name ? "done" : "done as " + base(res.path)) + shrunk, "ok");
+      rows[i](`done → ${dir(res.path).replace("/c/mobile/", "")}${base(res.path)}${shrunk}`, "ok");
     } catch (e) { rows[i](e.message, "err"); showErr(e.message); break; }
   }
+  $("logTitle").textContent = "Upload finished";
+  if (last) { cur = dir(last); selected.clear(); }  // show where the files went
   busy--;
   await load(false);
 }
@@ -421,8 +483,9 @@ function initOptions(caps) {
   try { saved = JSON.parse(localStorage.getItem("opts") || "{}"); } catch (e) {}
   img.value = caps.images ? (saved.img ?? "fit") : "";
   mp3.value = caps.mp3 ? (saved.mp3 ?? "64") : "";
-  const save = () => { try { localStorage.setItem("opts", JSON.stringify({ img: img.value, mp3: mp3.value })); } catch (e) {} };
-  img.onchange = mp3.onchange = save;
+  $("optSort").checked = saved.sort ?? true;
+  const save = () => { try { localStorage.setItem("opts", JSON.stringify({ img: img.value, mp3: mp3.value, sort: $("optSort").checked })); } catch (e) {} };
+  img.onchange = mp3.onchange = $("optSort").onchange = save;
 }
 api("/api/caps").then((r) => r.json()).then(initOptions).catch(() => {});
 

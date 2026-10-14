@@ -41,7 +41,13 @@ Re-run `./make_app.sh` after changing the code.
 3. **Phone → Mac:** select files and click **Download**. One file is saved as-is;
    several files come as `V3r_files.zip`. Both go to your browser's Downloads folder.
 4. **Mac → phone:** drag files into the window or click **Upload to phone…**.
-   They go into the folder that's open. The phone only accepts Latin file names,
+   With *Put into Photos / Ringtones / Videos by type* ticked (the default), pictures
+   go to `/c/mobile/picture`, music to `/c/mobile/audio` and video to `/c/mobile/video`,
+   whichever folder is open. The phone only lists ringtones from the audio folder.
+   Other files, or everything when the box is unticked, go into the open folder.
+   Each file shows a progress bar: sending to the app, then compressing, then writing
+   to the phone with speed and time left. Writing runs at about 30 KB/s, so a 1.4 MB
+   MP3 takes just under a minute. The phone only accepts Latin file names,
    so names are transliterated (`Фото.jpg` → `Foto.jpg`). Existing files are never
    overwritten: a clashing name gets a suffix (`Foto_1.jpg`). Files bigger than
    the free space are refused before anything is written.
@@ -131,8 +137,8 @@ Unplugging the cable puts the phone back into normal mode.
 - Once during early testing, the phone stopped answering on USB right after a delete.
   It didn't happen again with the current code. Unplugging and replugging the
   cable fixes it. The app detects this case and asks you to replug.
-- USB 1.1 full speed plus a 1 KB-per-request protocol makes transfers slow,
-  at tens of KB/s.
+- USB 1.1 full speed plus a 1 KB-per-request protocol makes transfers slow:
+  about 30 KB/s when writing to a V3r.
 - Only tested on the V3r. Other P2K phones (V3, V3i, E398, L7, …) use the same
   protocol, but their USB IDs or volume layout may differ.
 

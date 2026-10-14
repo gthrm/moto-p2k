@@ -34,7 +34,10 @@ mimetypes.add_type("audio/amr", ".amr")
 mimetypes.add_type("audio/midi", ".mid")
 mimetypes.add_type("video/3gpp", ".3gp")
 
+FOLDERS = {"picture": "/c/mobile/picture/", "music": "/c/mobile/audio/", "video": "/c/mobile/video/"}
+
 lock = threading.Lock()
+jobs = {}  # upload id -> {"stage", "done", "total", "rate", "eta"} for the progress display
 state = {"phone": None, "files": None, "space": None, "last_ping": time.time()}
 
 
@@ -137,22 +140,42 @@ def unique_path(folder, name, taken):
     return path
 
 
-def write_file(folder, name, data, image_mode=None, mp3_kbps=None):
+def job_update(job, **kw):
+    if job:
+        jobs.setdefault(job, {}).update(kw)
+
+
+def write_file(folder, name, data, image_mode=None, mp3_kbps=None, sort=False, job=None):
+    if sort and media.kind(name) in FOLDERS:
+        folder = FOLDERS[media.kind(name)]
     if not folder.endswith("/"):
         folder += "/"
     original = len(data)
+    job_update(job, stage="compressing", done=0, total=0)
     try:
-        data, name = media.prepare(data, name, image_mode, mp3_kbps)
+        data, name = media.prepare(data, name, image_mode, mp3_kbps,
+                                   lambda f: job_update(job, done=int(f * 1000), total=1000))
     except media.MediaError as e:
         raise AppError(str(e), 422)
+    job_update(job, stage="waiting", done=0, total=len(data))
     files = file_list()
     path = unique_path(folder, safe_name(name), {n.lower() for n, _, _ in files})
     free = free_space(refresh=True).get(path[:3])
     if free is not None and len(data) > free:
         raise AppError("Not enough space on the phone: %s needs %s, only %s free"
                        % (name, p2k.human(len(data)), p2k.human(free)), 507)
+    def go(ph):
+        start = time.time()
+
+        def progress(done, total):
+            rate = done / max(time.time() - start, 0.001)
+            job_update(job, done=done, rate=rate, eta=(total - done) / rate if rate else None)
+
+        job_update(job, stage="writing", done=0)
+        ph.write_all(path, data, progress)
+
     try:
-        with_phone(lambda ph: ph.write_all(path, data))
+        with_phone(go)
     finally:
         state["space"] = None
     if state["files"] is not None:
@@ -253,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
             elif route == ("GET", "/api/caps"):
                 self._json({"images": media.images_supported(), "mp3": media.find_ffmpeg() is not None,
                             "screen": media.SCREEN, "bitrates": media.MP3_BITRATES})
+            elif route == ("GET", "/api/progress"):
+                self._json(jobs.get(q.get("job"), {}))
             elif route == ("GET", "/api/space"):
                 self._json({"free": free_space(refresh=q.get("refresh") == "1")})
             elif route == ("GET", "/api/file"):
@@ -264,7 +289,12 @@ class Handler(BaseHTTPRequestHandler):
                 kbps = int(q["mp3"]) if q.get("mp3") else None
                 if img and img not in media.IMAGE_MODES or kbps and kbps not in media.MP3_BITRATES:
                     raise AppError("Unknown conversion option", 400)
-                self._json(write_file(q["dir"], q["name"], self._body(), img, kbps))
+                job = q.get("job")
+                try:
+                    self._json(write_file(q["dir"], q["name"], self._body(), img, kbps,
+                                          sort=q.get("sort") == "1", job=job))
+                finally:
+                    jobs.pop(job, None)
             elif route == ("POST", "/api/delete"):
                 delete_files(json.loads(self._body())["paths"])
                 self._json({"ok": True})

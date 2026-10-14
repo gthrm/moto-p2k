@@ -81,11 +81,24 @@ def image_for_screen(data, name, mode="fit", quality=85):
     return out, os.path.splitext(name)[0] + ".jpg"
 
 
-def mp3_for_phone(data, name, kbps=64):
+def _duration(ffmpeg, path):
+    ffprobe = os.path.join(os.path.dirname(ffmpeg), "ffprobe")
+    if not os.path.exists(ffprobe):
+        return None
+    r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return None
+
+
+def mp3_for_phone(data, name, kbps=64, on_progress=None):
     """Return (data, name) re-encoded as MP3 at kbps (44.1 kHz; mono at 48 kbps and below).
 
     Cover art is dropped, tags are kept as ID3v2.3. If the source is already an MP3
     that would only get bigger, it is returned unchanged.
+    on_progress(fraction) is called while encoding when the duration is known.
     """
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -100,9 +113,19 @@ def mp3_for_phone(data, name, kbps=64):
                "-id3v2_version", "3"]
         if kbps <= 48:
             cmd += ["-ac", "1"]
-        r = subprocess.run(cmd + [dst], capture_output=True, text=True, timeout=600)
-        if r.returncode != 0 or not os.path.exists(dst):
-            msg = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
+        duration = _duration(ffmpeg, src) if on_progress else None
+        cmd += ["-progress", "pipe:1", "-nostats", dst]
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as p:
+            for line in p.stdout:
+                # out_time_us is microseconds of audio encoded so far
+                if duration and line.startswith("out_time_us="):
+                    try:
+                        on_progress(min(int(line.split("=", 1)[1]) / 1e6 / duration, 1.0))
+                    except ValueError:
+                        pass
+            err = p.stderr.read()
+        if p.returncode != 0 or not os.path.exists(dst):
+            msg = (err.strip().splitlines() or ["unknown error"])[-1]
             raise MediaError("Can't convert %s: %s" % (name, msg))
         with open(dst, "rb") as f:
             out = f.read()
@@ -111,11 +134,23 @@ def mp3_for_phone(data, name, kbps=64):
     return out, os.path.splitext(name)[0] + ".mp3"
 
 
-def prepare(data, name, image_mode=None, mp3_kbps=None):
+def kind(name):
+    """'picture', 'music', 'video' or None, from the file extension."""
+    ext = _ext(name)
+    if ext in IMAGE_EXT:
+        return "picture"
+    if ext in AUDIO_EXT or ext in (".mid", ".midi", ".amr"):
+        return "music"
+    if ext in (".3gp", ".mp4"):
+        return "video"
+    return None
+
+
+def prepare(data, name, image_mode=None, mp3_kbps=None, on_progress=None):
     """Apply the requested conversions to one file; other files pass through."""
     ext = _ext(name)
     if image_mode and ext in IMAGE_EXT:
         return image_for_screen(data, name, image_mode)
     if mp3_kbps and ext in AUDIO_EXT:
-        return mp3_for_phone(data, name, mp3_kbps)
+        return mp3_for_phone(data, name, mp3_kbps, on_progress)
     return data, name
